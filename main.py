@@ -5,9 +5,10 @@ import subprocess
 import logging
 import datetime
 import pathlib
+from pathlib import Path
 from pipeline.localize import localize_requirements
 from anthropic_client import AnthropicClient
-
+from pipeline.collect import collect_requirements
 def setup_logger():
     """Set up and return a logger that writes to both console and a file."""
     # Create timestamp for the log directory
@@ -86,6 +87,10 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
     # Move into the repo directory
     logger.debug(f"Changing directory to {target_dir}")
     os.chdir(target_dir)
+
+    # Check out back to main branch
+    logger.info(f"Checking out back to main branch")
+    subprocess.run(["git", "checkout", "main"], capture_output=True, text=True)
 
     # Get commit history for the date range and capture output
     logger.info(f"Getting commit history from {date_from} to {date_to}...")
@@ -168,6 +173,44 @@ def dump_anthropic_response(response, logger):
             })
     return json.dumps(all_blocks, indent=4)
 
+def load_file_contents(file_paths, base_dir, logger=None):
+    """
+    Load the contents of files from a list of file paths, changing to a base directory first.
+    
+    Args:
+        file_paths (list): List of file paths to load
+        base_dir (str): Base directory to change to before loading files
+        logger (logging.Logger, optional): Logger for tracking operations
+        
+    Returns:
+        dict: Dictionary mapping file paths to their contents
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    # Save current working directory
+    current_dir = os.getcwd()
+    
+    file_contents = {}
+    try:
+        # Change to base directory
+        os.chdir(base_dir)
+        logger.info(f"Changed directory to {base_dir}")
+        
+        # Load file contents
+        for file_path in file_paths:
+            try:
+                with open(file_path, "r") as f:
+                    file_contents[file_path] = f.read()
+                logger.info(f"Loaded content for {file_path}")
+            except Exception as e:
+                logger.error(f"Error loading {file_path}: {e}")
+    finally:
+        # Restore original directory
+        os.chdir(current_dir)
+        logger.info(f"Restored directory to {current_dir}")
+    
+    return file_contents
 
 # Main execution
 if __name__ == "__main__":
@@ -179,8 +222,8 @@ if __name__ == "__main__":
     result = clone_and_get_tree(
         repo_url="https://github.com/scikit-learn/scikit-learn.git",
         target_dir="scikit-learn",
-        date_from="2018-01-01",
-        date_to="2018-01-02",
+        date_from="2024-01-01",
+        date_to="2024-01-10",
         tree_depth=3,
         # if isinstance(content_block, ContentBlock) and content_block.type == "text":
         #     print(content_block.text)
@@ -215,7 +258,7 @@ if __name__ == "__main__":
     if text_block is None:
         logger.error("Expected text content block, got %s", content_block.type)
         exit(1)
-    logger.info(text_block)
+    logger.info(response_dump)
 
     # regex grab the ```json block
     logger.info("Extracting JSON block...")
@@ -230,3 +273,40 @@ if __name__ == "__main__":
         logger.error("Error parsing JSON block: %s", e)
         exit(1)
     logger.info(json_data)
+    
+    # Load file contents
+    file_contents = load_file_contents(
+        file_paths=json_data,
+        base_dir=pathlib.Path("playground/scikit-learn"),
+        logger=logger
+    )
+
+
+    # Collect requirements
+    prompt = collect_requirements(file_contents, result["commit_hash"], result["commit_date"])
+    logger.info(prompt)
+
+    # Initialize Anthropic client
+    client = AnthropicClient()
+    response = client.create_message_with_retry(
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+    logger.info("Response content:")
+    text_block = None
+    for content_block in response.content:
+        if content_block.type == "text" and content_block.text is not None:
+            text_block = content_block.text
+    response_dump = dump_anthropic_response(response, logger)
+    if text_block is None:
+        logger.error("Expected text content block, got %s", content_block.type)
+        exit(1)
+    logger.info(response_dump)
+
+    # regex grab the ```json block
+    logger.info("Extracting JSON block...")
+    json_block = re.search(r"```json(.*)```", content_block.text, re.DOTALL).group(1)
