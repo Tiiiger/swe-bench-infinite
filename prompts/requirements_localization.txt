@@ -1,0 +1,31 @@
+You are a software engineer trying to install a development environment for the open source project scikit-learn.
+Specifically, you are trying to run test on commit {commit_hash}, which is a commit from {commit_date}.
+
+It is tricky to install the development environment from before, so your first step is to identify all the files that could
+potentially contain information about the requirements.
+
+Here are some examples that you should usually consider:
+- requirements.txt
+- requirements-dev.txt
+- pyproject.toml
+- setup.cfg
+- setup.py
+- CONTRIBUTING.md
+- README.md
+- docs/contributing.rst
+
+Next, I am going to provide you with the result of the bash command `tree -L 3`.
+
+{tree_result}
+
+Based on the tree, you must identify up to {top_k} files that you think are most likely to contain the information about the requirements.
+Each file path should be relative to the root of the repository. Remember, your goal is to install the development environment so that you can contribute to the project.
+
+You must output the list of files in a JSON array format. Make sure to include only a single ```json``` block in output, because we will use regex to grab your results.
+For example:
+
+```json
+["requirements.txt", "requirements-dev.txt", "pyproject.toml", "CONTRIBUTING.md", "README.md"]
+```
+
+Now, begin your work! 
