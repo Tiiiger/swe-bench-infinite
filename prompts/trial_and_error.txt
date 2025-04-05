@@ -14,16 +14,25 @@ Here are the files:
 
 ========================================
 
-From reading these files, you have identified these requirements:
+Based on what you identified from these files, us developers also look up the most up-to-date version of the pip packages at {commit_date}.
+We combined the requirements into the following
 
 ```json
 {requirements_json}
 ```
 
+========================================
+
 Now, us developers have tried to install the identified requirements in a docker environment and have run into the following error
 
 {error_message}
 
-Based on the error message, can you retry and adjust the requirements?
+========================================
+
+Based on the error message, can you retry and adjust the requirements that we came up together?
+
+```json
+{requirements_json}
+```
 
 Begin your work now, and output a ```json block using the same format from before.

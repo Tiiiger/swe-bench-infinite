@@ -6,6 +6,7 @@ import logging
 import datetime
 import pathlib
 import docker
+import argparse
 from pathlib import Path
 from typing import Dict, List, TypedDict
 from pipeline.localize import localize_requirements
@@ -15,6 +16,7 @@ from pipeline.retry import retry_installation
 from version_finder import get_version_at_time
 from exceptions import SWEBenchError, GitError, AnthropicResponseError, DockerBuildError, RequirementsError
 from logger import setup_logger, setup_child_logger
+from exp_utils import dump_anthropic_response, get_latest_exp_dir
 
 class RequirementsData(TypedDict):
     """
@@ -166,21 +168,6 @@ def clone_and_get_tree(repo_url: str, target_dir: str, date_from: str, date_to: 
         "tree_output": tree_result.stdout,
     }
 
-def dump_anthropic_response(response, logger):
-    all_blocks = []
-    for content_block in response.content:
-        if content_block.type == "text":
-            all_blocks.append({
-                "type": "text",
-                "text": content_block.text,
-            })
-        elif content_block.type == "thinking":
-            all_blocks.append({
-                "type": "thinking",
-                "thinking": content_block.thinking
-            })
-    return json.dumps(all_blocks, indent=4)
-
 def load_file_contents(file_paths, base_dir, logger=None):
     """
     Load the contents of files from a list of file paths, changing to a base directory first.
@@ -319,13 +306,20 @@ def process_localization(result: GitRepoData, client, logger=None):
     # parse the json block
     loc_logger.info("Parsing JSON block...")
     try:
-        json_data: List[str] = json.loads(json_block)
+        file_paths: List[str] = json.loads(json_block)
     except json.JSONDecodeError as e:
         loc_logger.error("Error parsing JSON block: %s", e)
         raise RequirementsError(f"Error parsing JSON block: {e}")
-    loc_logger.info(json_data)
+    loc_logger.info(file_paths)
     
-    return json_data
+    # Save to exps directory for debugging purposes
+    # Extract timestamp from the logger's file handler
+    exp_dir = os.path.dirname(loc_logger.handlers[1].baseFilename)
+    loc_logger.info(f"Saving localization results to {exp_dir}")
+    with open(os.path.join(exp_dir, "localization_output.json"), "w") as f:
+        json.dump(file_paths, f, indent=4)
+    
+    return file_paths
 
 def write_docker_files(requirements_data: RequirementsData, result: GitRepoData, repo_url, logger):
     """
@@ -437,10 +431,16 @@ def process_requirements_collection(file_contents: dict[str, str], result: GitRe
         req_logger.error("Error parsing JSON block: %s", e)
         raise RequirementsError(f"Error parsing JSON block: {e}")
 
-    # Write Docker configuration files
-    write_docker_files(requirements_data, result, repo_url, req_logger)
+    # Save to exps directory for debugging purposes
+    # Extract timestamp from the logger's file handler
+    exp_dir = os.path.dirname(req_logger.handlers[1].baseFilename)
+    req_logger.info(f"Saving requirements results to {exp_dir}")
+    with open(os.path.join(exp_dir, "requirements_output.json"), "w") as f:
+        json.dump(requirements_data, f, indent=4)
 
-def process_trial_and_error(file_contents, requirements_json, result: GitRepoData, error_message: str, logger=None):
+    return requirements_data
+
+def process_trial_and_error(file_contents, requirements_data, result: GitRepoData, error_message: str, logger=None):
     """
     Process the trial and error of the Docker environment.
     
@@ -452,16 +452,23 @@ def process_trial_and_error(file_contents, requirements_json, result: GitRepoDat
         logger (logging.Logger, optional): Parent logger for tracking operations
     """
     # Create specific logger for this function
+    print("trial_and_error parent logger: ", logger)
     trial_logger = setup_child_logger("trial_and_error", logger, "trial_and_error")
     
     trial_logger.info("Starting trial and error process for failed Docker build")
     trial_logger.info(f"Error message: {error_message}")
-    
-    prompt = retry_installation(file_contents, result["commit_hash"], result["commit_date"], error_message)
+
+    prompt = retry_installation(file_contents, json.dumps(requirements_data, indent=2), result["commit_hash"], result["commit_date"], error_message)
+    trial_logger.info(prompt)
     trial_logger.info("Generated retry prompt")
 
 # Main execution
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="SWE-Bench environment builder")
+    parser.add_argument("--debug", type=str, help="Load results from a specific experiment timestamp (format: YYYYMMDD_HHMMSS)")
+    args = parser.parse_args()
+    
     # Set up main logger
     logger = setup_logger()
 
@@ -481,20 +488,63 @@ if __name__ == "__main__":
     # Initialize Anthropic client
     client = AnthropicClient()
 
-    # Process localization - now creates its own logger
-    json_data = process_localization(result, client, logger)
+    if args.debug:
+        logger.info(f"Debug mode enabled, loading results from specified experiment: {args.debug}")
+        exp_dir = os.path.join("exps", args.debug)
+        if not os.path.exists(exp_dir) or not os.path.isdir(exp_dir):
+            logger.error(f"Specified experiment directory does not exist: {exp_dir}")
+            exit(1)
+            
+        logger.info(f"Loading from experiment directory: {exp_dir}")
         
-    # Load file contents
-    file_contents = load_file_contents(
-        file_paths=json_data,
-        base_dir=pathlib.Path("playground/scikit-learn"),
-        logger=logger
-    )
+        # Load localization results
+        localization_file = os.path.join(exp_dir, "localization", "localization_output.json")
+        if not os.path.exists(localization_file):
+            logger.error(f"Localization output file not found: {localization_file}")
+            exit(1)
+            
+        with open(localization_file, "r") as f:
+            file_paths = json.load(f)
+            logger.info(f"Loaded localization data: {file_paths}")
+        
+        # Load file contents
+        file_contents = load_file_contents(
+            file_paths=file_paths,
+            base_dir=pathlib.Path("playground/scikit-learn"),
+            logger=logger
+        )
+        
+        # Load requirements collection results
+        requirements_file = os.path.join(exp_dir, "requirements", "requirements_output.json")
+        if not os.path.exists(requirements_file):
+            logger.error(f"Requirements output file not found: {requirements_file}")
+            exit(1)
+            
+        with open(requirements_file, "r") as f:
+            requirements_data = json.load(f)
+            logger.info(f"Loaded requirements data: {requirements_data}")
+            
+        # Write Docker configuration files
+        write_docker_files(requirements_data, result, REPO_URL, logger)
+    else:
+        # Process localization - now creates its own logger
+        file_paths = process_localization(result, client, logger)
+            
+        # Load file contents
+        file_contents = load_file_contents(
+            file_paths=file_paths,
+            base_dir=pathlib.Path("playground/scikit-learn"),
+            logger=logger
+        )
 
-    # Process requirements collection - now creates its own logger
-    process_requirements_collection(file_contents, result, client, logger, REPO_URL)
+        # Process requirements collection - now creates its own logger
+        requirements_data = process_requirements_collection(file_contents, result, client, logger, REPO_URL)
+
+    # Write Docker configuration files
+    write_docker_files(requirements_data, result, REPO_URL, logger)
         
     # Run subprocess to build docker image
+    subprocess.run(["docker", "build", "-t", "testbed-base:latest", "-f", "./docker/Dockerfile.base", "./docker"], capture_output=True, text=True)
     output = subprocess.run(["docker", "build", "-t", "testbed:latest", "-f", "./docker/Dockerfile", "./docker"], capture_output=True, text=True)
         
     # Check if Docker build was successful
@@ -502,6 +552,6 @@ if __name__ == "__main__":
         logger.error(f"Docker build failed with exit code {output.returncode}")
         logger.error(f"Error output: {output.stderr}")
         error_message = output.stderr
-        process_trial_and_error(file_contents, result, error_message, logger)
+        process_trial_and_error(file_contents, requirements_data, result, error_message, logger)
     else:
         logger.info("Docker build completed successfully")

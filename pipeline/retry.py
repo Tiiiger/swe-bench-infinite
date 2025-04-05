@@ -5,6 +5,7 @@ def retry_installation(file_contents: dict[str, str], requirements_json: str, co
     with open("prompts/trial_and_error.txt", "r") as f:
         prompt = f.read()
     prompt = prompt.replace("{file_contents_str}", make_file_contents_str(file_contents))
+    prompt = prompt.replace("{requirements_json}", requirements_json)
     prompt = prompt.replace("{commit_hash}", commit_hash)
     prompt = prompt.replace("{commit_date}", commit_date)
     prompt = prompt.replace("{error_message}", error_message)
