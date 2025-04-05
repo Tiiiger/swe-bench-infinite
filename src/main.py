@@ -11,12 +11,13 @@ from anthropic_client import AnthropicClient
 from exceptions import (
     GitError,
 )
-from logger import setup_child_logger, setup_logger
-from model_utils import anthropic_generate_json
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
 from pipeline.retry import retry_installation
 from version_finder import check_and_replace_version, get_version_at_time
+
+from logger import setup_child_logger, setup_logger
+from model_utils import anthropic_generate_json
 
 
 class RequirementsData(TypedDict):

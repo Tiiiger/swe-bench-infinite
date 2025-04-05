@@ -22,3 +22,29 @@ known-first-party = ["model_utils", "exp_utils", "logger"]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swe-bench-infinite"
+version = "0.1.0"
+description = "SWE Bench Infinite"
+requires-python = ">=3.8"
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "selenium",
+    "webdriver-manager",
+    "anthropic",
+    "bs4",
+    "docker"
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "ruff",
+    "pre-commit",
+]

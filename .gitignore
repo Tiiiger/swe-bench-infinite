@@ -2,3 +2,5 @@ __pycache__
 playground
 exps
 docker/*.sh
+build
+src/swe_bench_infinite.egg-info
