@@ -368,13 +368,13 @@ def write_docker_files(requirements_data: RequirementsData, result: GitRepoData,
     with open("docker/apt_install.sh", "w") as f:
         f.write(f"apt-get update && apt-get install -y {' '.join(requirements_data['apt_packages'])}\n")
 
-    with open("docker/requirements_collection.txt", "w") as f:
+    with open("docker/pip_install.sh", "w") as f:
         for package, version in requirements_data['pip_packages'].items():
-            if version.startswith(">=") or version.startswith("=="):
+            if version.startswith("=="):
                 version = version[2:]
-            elif version == "":
+            elif version.startswith(">=") or version == "":
                 version = get_version_at_time(package, result["commit_date"])
-            f.write(f"{package}=={version}\n")
+            f.write(f"pip install {package}=={version}\n")
     
     # If install_commands is provided, write them to a file
     if "install_commands" in requirements_data and requirements_data["install_commands"]:
@@ -451,7 +451,7 @@ def process_requirements_collection(file_contents: dict[str, str], result: GitRe
     # Write Docker configuration files
     write_docker_files(requirements_data, result, repo_url, logger)
 
-def process_trial_and_error(file_contents, result: GitRepoData, client, logger, repo_url):
+def process_trial_and_error(file_contents, result: GitRepoData, error_message: str, logger):
     """
     Process the trial and error of the Docker environment.
     
@@ -462,7 +462,7 @@ def process_trial_and_error(file_contents, result: GitRepoData, client, logger, 
         logger (logging.Logger): Logger for tracking operations
         repo_url (str): URL of the git repository
     """
-    prompt = retry_installation(file_contents, result, repo_url)
+    prompt = retry_installation(file_contents, result["commit_hash"], result["commit_date"], error_message)
     pass
 
 # Main execution
@@ -507,6 +507,7 @@ if __name__ == "__main__":
     if output.returncode != 0:
         logger.error(f"Docker build failed with exit code {output.returncode}")
         logger.error(f"Error output: {output.stderr}")
-        process_trial_and_error(file_contents, result, client, logger, REPO_URL)
+        error_message = output.stderr
+        process_trial_and_error(file_contents, result, error_message, logger)
     else:
         logger.info("Docker build completed successfully")
