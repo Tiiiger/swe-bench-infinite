@@ -16,7 +16,7 @@ from model_utils import anthropic_generate_json
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
 from pipeline.retry import retry_installation
-from version_finder import get_version_at_time
+from version_finder import check_and_replace_version, get_version_at_time
 
 
 class RequirementsData(TypedDict):
@@ -523,13 +523,7 @@ def process_trial_and_error(
     return casted_requirements_data
 
 
-def build_docker_images(
-    time_traveled_requirements: RequirementsData,
-    file_contents: Dict[str, str],
-    result: GitRepoData,
-    client: AnthropicClient,
-    logger: logging.Logger,
-):
+def build_docker_images(logger: logging.Logger):
     """
     Build Docker images for the testbed environment.
 
@@ -587,7 +581,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Set up main logger
-    logger = setup_logger()
+    logger = setup_logger(debug=args.debug is not None)
 
     REPO_URL = "https://github.com/scikit-learn/scikit-learn.git"
 
@@ -596,8 +590,8 @@ if __name__ == "__main__":
     result = clone_and_get_tree(
         repo_url=REPO_URL,
         target_dir="scikit-learn",
-        date_from="2018-01-01",
-        date_to="2018-01-31",
+        date_from="2019-01-01",
+        date_to="2019-01-31",
         tree_depth=3,
         logger=logger,
     )
@@ -638,17 +632,6 @@ if __name__ == "__main__":
         with open(requirements_file, "r") as f:
             requirements_data = json.load(f)
             logger.info(f"Loaded requirements data: {requirements_data}")
-
-        # Write Docker configuration files
-        time_traveled_requirements = time_travel_requirements(
-            requirements_data=requirements_data, commit_date=result["commit_date"], logger=logger
-        )
-        write_docker_files(
-            requirements_data=time_traveled_requirements,
-            result=result,
-            repo_url=REPO_URL,
-            logger=logger,
-        )
     else:
         # Process localization - now creates its own logger
         file_paths = process_localization(result=result, client=client, logger=logger)
@@ -679,20 +662,14 @@ if __name__ == "__main__":
     )
 
     # Build Docker images
-    output = build_docker_images(
-        time_traveled_requirements=time_traveled_requirements,
-        file_contents=file_contents,
-        result=result,
-        client=client,
-        logger=logger,
-    )
+    output = build_docker_images(logger=logger)
 
     # Check if Docker build was successful
     if output.returncode != 0:
         logger.error(f"Docker build failed with exit code {output.returncode}")
         logger.error(f"Error output: {output.stderr}")
         error_message = output.stderr
-        updated_requirements = process_trial_and_error(
+        time_traveled_requirements = process_trial_and_error(
             file_contents=file_contents,
             requirements_data=time_traveled_requirements,
             result=result,
@@ -701,18 +678,12 @@ if __name__ == "__main__":
             logger=logger,
         )
         write_docker_files(
-            requirements_data=updated_requirements,
+            requirements_data=time_traveled_requirements,
             result=result,
             repo_url=REPO_URL,
             logger=logger,
         )
-        output = build_docker_images(
-            time_traveled_requirements=updated_requirements,
-            file_contents=file_contents,
-            result=result,
-            client=client,
-            logger=logger,
-        )
+        output = build_docker_images(logger=logger)
         if output.returncode != 0:
             logger.error(
                 f"After trial and error, Docker build failed with exit code {output.returncode}"
@@ -723,3 +694,45 @@ if __name__ == "__main__":
         else:
             logger.info("After trial and error, Docker build completed successfully")
             logger.info(output.stdout)
+
+    # after the docker image is built, we run pip freeze and get all the installed packages
+    # we need to first activate the testbed environment
+    output = subprocess.run(
+        args=["docker", "exec", "testbed", "pip", "freeze"],
+        capture_output=True,
+        text=True,
+    )
+    logger.info(output.stdout)
+    # process the requirements being spit out by pip freeze
+    pip_freeze_requirements: dict[str, str] = dict()
+    for line in output.stdout.split("\n"):
+        if "==" not in line:
+            continue
+        package, version = line.split("==")
+        pip_freeze_requirements[package] = check_and_replace_version(
+            package, version, result["commit_date"]
+        )
+
+    # update the requirements data
+    time_traveled_requirements["pip_packages"] = pip_freeze_requirements
+    breakpoint()
+
+    # write the docker files again
+    write_docker_files(
+        requirements_data=time_traveled_requirements,
+        result=result,
+        repo_url=REPO_URL,
+        logger=logger,
+    )
+
+    # build the docker image again
+    logger.info("Building docker image (testbed) with time traveled pip freeze requirements")
+    output = build_docker_images(logger=logger)
+    if output.returncode != 0:
+        logger.error(f"Docker build failed with exit code {output.returncode}")
+        logger.error(f"Error output: {output.stderr}")
+        logger.error("Failed to build Docker images")
+        exit(1)
+    else:
+        logger.info(output.stdout)
+        logger.info("Docker image built successfully")

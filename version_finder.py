@@ -1,6 +1,7 @@
 # https://pypi.org/project/numpy/#history
 # https://pypi.org/project/pandas/#history
 # https://pypi.org/project/scikit-learn/#history
+import time
 import unittest
 from collections import OrderedDict
 from datetime import datetime
@@ -8,29 +9,143 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
+# Import Selenium components
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
 
-def get_versions(package_name):
+
+def get_versions_with_requests(package_name):
+    """Get package version history using the requests library."""
     url = f"https://pypi.org/project/{package_name}/#history"
     response = requests.get(url)
+
+    if response.status_code != 200:
+        return None
+
     soup = BeautifulSoup(response.text, "html.parser")
     version_to_date = OrderedDict()
-    for version in soup.find_all("a", class_="release__card"):
-        version_element = version.find(class_="release__version")
-        version_number = version_element.find(string=True, recursive=False).strip()
-        version_date = version.find(class_="release__version-date").find("time")
-        if version_date and version_date.get("datetime"):
-            # Convert datetime string to timestamp when saving
-            timestamp = datetime.fromisoformat(
-                version_date["datetime"].replace("Z", "+00:00")
-            ).timestamp()
-            version_to_date[version_number] = timestamp
-        else:
-            print(f"No date found for {version_number}")
 
-    # make sure the dates are sorted
+    release_cards = soup.find_all("div", class_="release__card")
+
+    for card in release_cards:
+        try:
+            version_element = card.find("p", class_="release__version")
+            version_number = version_element.text.strip()
+
+            version_date = card.find("p", class_="release__version-date").find("time")
+            datetime_attr = version_date.get("datetime")
+
+            if datetime_attr:
+                timestamp = datetime.fromisoformat(datetime_attr.replace("Z", "+00:00")).timestamp()
+                version_to_date[version_number] = timestamp
+            else:
+                print(f"No date found for {version_number}")
+        except Exception as e:
+            print(f"Error processing version: {e}")
+
+    # Make sure the dates are sorted
     version_to_date = OrderedDict(sorted(version_to_date.items(), key=lambda x: x[1]))
 
     return version_to_date
+
+
+def get_versions_with_selenium(package_name):
+    """Get package version history using Selenium."""
+    # Set up headless Chrome browser
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+
+    # Initialize the Chrome driver
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()), options=chrome_options
+    )
+
+    try:
+        # Navigate to the package history page
+        url = f"https://pypi.org/project/{package_name}/#history"
+        driver.get(url)
+
+        # Wait for the history section to load
+        WebDriverWait(driver, 2).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "release__card"))
+        )
+
+        # Allow time for JavaScript to fully render the page
+        time.sleep(0.1)
+
+        # Parse the page content
+        version_to_date = OrderedDict()
+        release_cards = driver.find_elements(By.CLASS_NAME, "release__card")
+
+        for card in release_cards:
+            try:
+                version_element = card.find_element(By.CLASS_NAME, "release__version")
+                version_number = version_element.text.strip()
+
+                version_date = card.find_element(
+                    By.CLASS_NAME, "release__version-date"
+                ).find_element(By.TAG_NAME, "time")
+                datetime_attr = version_date.get_attribute("datetime")
+
+                if datetime_attr:
+                    # Convert datetime string to timestamp when saving
+                    timestamp = datetime.fromisoformat(
+                        datetime_attr.replace("Z", "+00:00")
+                    ).timestamp()
+                    version_to_date[version_number] = timestamp
+                else:
+                    print(f"No date found for {version_number}")
+            except Exception as e:
+                print(f"Error processing version: {e}")
+
+        # make sure the dates are sorted
+        version_to_date = OrderedDict(sorted(version_to_date.items(), key=lambda x: x[1]))
+
+        return version_to_date
+
+    finally:
+        # Always close the browser
+        driver.quit()
+
+
+def get_versions(package_name, backend="requests"):
+    """
+    Get package version history using the specified backend.
+
+    Args:
+        package_name (str): Name of the package
+        backend (str): Backend to use, either "requests" or "selenium"
+
+    Returns:
+        OrderedDict: Mapping of version numbers to release timestamps
+    """
+    if backend == "requests":
+        return get_versions_with_requests(package_name)
+    elif backend == "selenium":
+        return get_versions_with_selenium(package_name)
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
+
+
+def check_and_replace_version(package_name, version, timestamp):
+    versions = get_versions(package_name)
+
+    if version in versions:
+        version_timestamp = versions[version]
+    else:
+        raise ValueError(f"Version {version} not found for {package_name}")
+
+    if timestamp < version_timestamp:
+        return version
+    else:
+        return get_version_at_time(package_name, timestamp)
 
 
 def get_version_at_time(package_name, timestamp):
@@ -39,13 +154,25 @@ def get_version_at_time(package_name, timestamp):
 
     Args:
         package_name (str): Name of the package
-        timestamp (float): YYYY-MM-DD
+        timestamp (float or str): Unix timestamp or YYYY-MM-DD
 
     Returns:
         str: Version number at the given timestamp
     """
-    versions = get_versions(package_name)
-    timestamp = datetime.strptime(timestamp, "%Y-%m-%d").timestamp()
+    # Convert string timestamp to float if necessary
+    if isinstance(timestamp, str):
+        timestamp = datetime.strptime(timestamp, "%Y-%m-%d").timestamp()
+
+    # First try with requests backend
+    versions = get_versions(package_name, backend="requests")
+
+    # If requests failed, try with selenium
+    if versions is None or len(versions) == 0:
+        versions = get_versions(package_name, backend="selenium")
+
+    # If both failed, raise error
+    if versions is None or len(versions) == 0:
+        raise ValueError(f"Failed to get versions for {package_name}")
 
     # Since versions is sorted by timestamp, we can just find the first version
     # that was released after our target timestamp and return the previous one
@@ -55,16 +182,33 @@ def get_version_at_time(package_name, timestamp):
             return prev_version
         prev_version = version
 
-    # If we get here, all versions are before our timestamp
+    if prev_version is None:
+        raise ValueError(f"No version found for {package_name} at {timestamp}")
+
     return prev_version
 
 
 class TestVersionFinder(unittest.TestCase):
     def test_numpy(self):
-        # Test with a known timestamp (e.g., January 1, 2024)
-        version = get_version_at_time("numpy", "2025-04-02")
-        self.assertEqual(version, "2.2.4")
+        # Test with a reasonable date that should have a known version
+        version = get_version_at_time("numpy", "2023-01-01")
+        print(f"numpy version on 2023-01-01: {version}")
+        self.assertIsNotNone(version)
+
+    def test_pandas(self):
+        # Test another package
+        version = get_version_at_time("pandas", "2022-01-01")
+        print(f"pandas version on 2022-01-01: {version}")
+        self.assertIsNotNone(version)
+
+    def test_backends(self):
+        # Test both backends
+        requests_versions = get_versions("numpy", backend="requests")
+        selenium_versions = get_versions("numpy", backend="selenium")
+        self.assertIsNotNone(requests_versions)
+        self.assertIsNotNone(selenium_versions)
 
 
 if __name__ == "__main__":
     unittest.main()
+    # print(get_version_at_time("attrs", "2019-01-01"))

@@ -3,13 +3,13 @@ import logging
 import pathlib
 
 
-def setup_logger():
+def setup_logger(debug=False):
     """Set up and return a logger that writes to both console and a file."""
     # Create timestamp for the log directory
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Create log directory
-    log_dir = f"exps/{timestamp}"
+    # Create log directory, add debug tag if in debug mode
+    log_dir = f"exps/{timestamp}_debug" if debug else f"exps/{timestamp}"
     pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
 
     # Configure logger

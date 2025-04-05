@@ -4,15 +4,6 @@ COPY apt_install.sh /apt_install.sh
 RUN chmod +x /apt_install.sh
 RUN /apt_install.sh
 
-# Download and install conda
-RUN wget 'https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh' -O miniforge.sh \
-    && bash miniforge.sh -b -p /opt/miniforge
-
-# Add conda to PATH
-ENV PATH=/opt/miniforge/bin:$PATH
-RUN mamba init --all
-RUN conda config --append channels conda-forge
-
 # Setup conda/mamba environment
 COPY conda_setup.sh /conda_setup.sh
 RUN chmod +x /conda_setup.sh
