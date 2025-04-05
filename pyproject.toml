@@ -39,7 +39,9 @@ dependencies = [
     "webdriver-manager",
     "anthropic",
     "bs4",
-    "docker"
+    "docker",
+    "datasets",
+    "PyGithub"
 ]
 
 [project.optional-dependencies]
