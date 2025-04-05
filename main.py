@@ -9,6 +9,8 @@ from pathlib import Path
 from pipeline.localize import localize_requirements
 from anthropic_client import AnthropicClient
 from pipeline.collect import collect_requirements
+from version_finder import get_version_at_time
+
 def setup_logger():
     """Set up and return a logger that writes to both console and a file."""
     # Create timestamp for the log directory
@@ -212,21 +214,64 @@ def load_file_contents(file_paths, base_dir, logger=None):
     
     return file_contents
 
+def get_head_commit_timestamp(repo_path, logger=None):
+    """
+    Get the timestamp of the HEAD commit in a git repository.
+    
+    Args:
+        repo_path (str): Path to the git repository
+        logger (logging.Logger, optional): Logger for tracking operations
+        
+    Returns:
+        str: Timestamp of the HEAD commit in ISO format
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    # Save current working directory
+    current_dir = os.getcwd()
+    
+    try:
+        # Change to repository directory
+        os.chdir(repo_path)
+        logger.info(f"Changed directory to {repo_path}")
+        
+        # Get timestamp of HEAD commit
+        logger.info("Getting timestamp of HEAD commit...")
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%ci", "HEAD"],
+            capture_output=True, text=True, check=True
+        )
+        
+        # Parse the timestamp
+        timestamp = result.stdout.strip()
+        logger.info(f"HEAD commit timestamp: {timestamp}")
+        
+        return timestamp
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error getting HEAD commit timestamp: {e}")
+        logger.error(f"Error output: {e.stderr}")
+        return None
+    finally:
+        # Restore original directory
+        os.chdir(current_dir)
+        logger.debug(f"Restored directory to {current_dir}")
+
 # Main execution
 if __name__ == "__main__":
     # Set up logger
     logger = setup_logger()
+
+    REPO_URL = "https://github.com/scikit-learn/scikit-learn.git"
     
     # Clone and get tree for scikit-learn from January 2018
     logger.info("Starting clone_and_get_tree operation")
     result = clone_and_get_tree(
-        repo_url="https://github.com/scikit-learn/scikit-learn.git",
+        repo_url=REPO_URL,
         target_dir="scikit-learn",
         date_from="2024-01-01",
         date_to="2024-01-10",
         tree_depth=3,
-        # if isinstance(content_block, ContentBlock) and content_block.type == "text":
-        #     print(content_block.text)
         logger=logger
     )
     
@@ -310,3 +355,33 @@ if __name__ == "__main__":
     # regex grab the ```json block
     logger.info("Extracting JSON block...")
     json_block = re.search(r"```json(.*)```", content_block.text, re.DOTALL).group(1)
+
+    # parse the json block
+    logger.info("Parsing JSON block...")
+    try:
+        requirements_data = json.loads(json_block)
+    except json.JSONDecodeError as e:
+        logger.error("Error parsing JSON block: %s", e)
+        exit(1)
+
+    # write to requirements.txt
+    with open("docker/conda_setup.sh", "w") as f:
+        python_version = requirements_data["python_version"]
+        f.write(f"mamba create -n testbed python={python_version}\n")
+        f.write(f"mamba activate testbed\n")
+
+    with open("docker/github_setup.sh", "w") as f:
+        f.write(f"git clone {REPO_URL} testbed\n")
+        f.write(f"cd testbed\n")
+        f.write(f"git checkout {result['commit_hash']}\n")
+
+    with open("docker/apt_install.sh", "w") as f:
+        f.write(f"apt-get update && apt-get install -y {' '.join(requirements_data['apt_packages'])}\n")
+
+    with open("docker/requirements_collection.txt", "w") as f:
+        for package, version in requirements_data['pip_packages'].items():
+            if version.startswith(">=") or version.startswith("=="):
+                version = version[2:]
+            elif version == "":
+                version = get_version_at_time(package, result["commit_date"])
+            f.write(f"{package}=={version}\n")
