@@ -1,6 +1,6 @@
 def localize_requirements(tree_result: str, commit_hash: str, commit_date: str):
     # load prompt from prompts/requirements_localization.txt
-    with open("prompts/requirements_localization.txt", "r") as f:
+    with open("src/prompts/requirements_localization.txt", "r") as f:
         prompt = f.read()
     prompt = prompt.replace("{tree_result}", tree_result)
     prompt = prompt.replace("{commit_hash}", commit_hash)

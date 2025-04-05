@@ -9,7 +9,7 @@ def retry_installation(
     error_message: str,
 ):
     # load prompt from prompts/trial_and_error.txt
-    with open("prompts/trial_and_error.txt", "r") as f:
+    with open("src/prompts/trial_and_error.txt", "r") as f:
         prompt = f.read()
     prompt = prompt.replace("{file_contents_str}", make_file_contents_str(file_contents))
     prompt = prompt.replace("{requirements_json}", requirements_json)

@@ -11,12 +11,12 @@ from bs4 import BeautifulSoup
 
 # Import Selenium components
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.firefox import GeckoDriverManager
 
 
 def get_versions_with_requests(package_name):
@@ -56,15 +56,13 @@ def get_versions_with_requests(package_name):
 
 def get_versions_with_selenium(package_name):
     """Get package version history using Selenium."""
-    # Set up headless Chrome browser
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
+    # Set up headless Firefox browser
+    firefox_options = Options()
+    firefox_options.add_argument("--headless")
 
-    # Initialize the Chrome driver
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()), options=chrome_options
+    # Initialize the Firefox driver
+    driver = webdriver.Firefox(
+        service=Service(GeckoDriverManager().install()), options=firefox_options
     )
 
     try:

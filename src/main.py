@@ -16,6 +16,7 @@ from pipeline.localize import localize_requirements
 from pipeline.retry import retry_installation
 from version_finder import check_and_replace_version, get_version_at_time
 
+import docker
 from logger import setup_child_logger, setup_logger
 from model_utils import anthropic_generate_json
 
@@ -96,6 +97,7 @@ def clone_and_get_tree(
     current_dir = os.getcwd()
 
     # Move to playground
+    os.makedirs("playground", exist_ok=True)
     clone_logger.info("Changing to playground directory")
     os.chdir("playground")
 
@@ -526,48 +528,72 @@ def process_trial_and_error(
 
 def build_docker_images(logger: logging.Logger):
     """
-    Build Docker images for the testbed environment.
+    Build Docker images for the testbed environment using the Docker Python API.
 
     Args:
-        time_traveled_requirements (RequirementsData): Requirements with appropriate versions
-        file_contents (Dict[str, str]): Dictionary mapping file paths to their contents
-        result (GitRepoData): Dictionary containing commit_hash and other info
-        client (AnthropicClient): Client for making requests to Anthropic API
-        logger (logging.Logger, optional): Logger for tracking operations
+        logger (logging.Logger): Logger for tracking operations
 
     Returns:
         bool: True if Docker build was successful, False otherwise
     """
-    # Run subprocess to build docker image
+    # Initialize Docker client
+    client = docker.from_env()
+
+    # Build base image
     logger.info("Building docker image (base)")
     start_time = time.time()
-    subprocess.run(
-        args=[
-            "docker",
-            "build",
-            "-t",
-            "testbed-base:latest",
-            "-f",
-            "./docker/Dockerfile.base",
-            "./docker",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    base_build_time = time.time() - start_time
-    logger.info(f"Base docker image build completed in {base_build_time:.2f} seconds")
+    try:
+        base_image, base_logs = client.images.build(
+            path="./docker",
+            dockerfile="Dockerfile.base",
+            tag="testbed-base:latest",
+        )
+        base_build_time = time.time() - start_time
+        logger.info(f"Base docker image build completed in {base_build_time:.2f} seconds")
+        logger.debug(f"Base image ID: {base_image.id}")
+    except docker.errors.BuildError as e:  # type: ignore[attr-defined]
+        logger.error(f"Error building base docker image: {e}")
+        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error building base docker image: {e}")
+        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
 
+    # Build testbed image
     logger.info("Building docker image (testbed)")
     start_time = time.time()
-    output = subprocess.run(
-        args=["docker", "build", "-t", "testbed:latest", "-f", "./docker/Dockerfile", "./docker"],
-        capture_output=True,
-        text=True,
-    )
-    testbed_build_time = time.time() - start_time
-    logger.info(f"Testbed docker image build completed in {testbed_build_time:.2f} seconds")
+    testbed_logs: list[dict] = []  # Initialize testbed_logs to prevent UnboundLocalError
+    try:
+        testbed_image, logs = client.images.build(
+            path="./docker",
+            dockerfile="Dockerfile",
+            tag="testbed:latest",
+        )
+        for log in logs:
+            testbed_logs.append(log)  # type: ignore[arg-type]
+        testbed_build_time = time.time() - start_time
+        logger.info(f"Testbed docker image build completed in {testbed_build_time:.2f} seconds")
+        logger.debug(f"Testbed image ID: {testbed_image.id}")
 
-    return output
+        # Save stdout to log directory if build successful
+        build_log = f"Build successful\nBase build time: {base_build_time:.2f} seconds\nTestbed build time: {testbed_build_time:.2f} seconds\nBase image ID: {base_image.id}\nTestbed image ID: {testbed_image.id}"
+
+        # Return success
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=build_log, stderr="")
+    except docker.errors.BuildError as e:  # type: ignore[attr-defined]
+        logger.error(f"Error building testbed docker image: {e}")
+        error_message = "\n".join(
+            [
+                log.get("stream", "")
+                for log in testbed_logs
+                if "error" in log.get("stream", "").lower()
+            ]
+        )
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr=error_message or str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error building testbed docker image: {e}")
+        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
 
 
 # Main execution
@@ -698,21 +724,30 @@ if __name__ == "__main__":
 
     # after the docker image is built, we run pip freeze and get all the installed packages
     # we need to first activate the testbed environment
-    output = subprocess.run(
-        args=["docker", "exec", "testbed", "pip", "freeze"],
-        capture_output=True,
-        text=True,
-    )
-    logger.info(output.stdout)
-    # process the requirements being spit out by pip freeze
-    pip_freeze_requirements: dict[str, str] = dict()
-    for line in output.stdout.split("\n"):
-        if "==" not in line:
-            continue
-        package, version = line.split("==")
-        pip_freeze_requirements[package] = check_and_replace_version(
-            package, version, result["commit_date"]
+    logger.info("Running pip freeze in Docker container")
+    try:
+        # Create and start a container from the testbed image
+        container = docker.from_env().containers.run(
+            "testbed:latest", command="pip freeze", remove=True, detach=False
         )
+        # container output is in bytes, convert to string
+        output_str = container.decode("utf-8")
+        logger.info(output_str)
+        # process the requirements being spit out by pip freeze
+        pip_freeze_requirements: dict[str, str] = dict()
+        for line in output_str.split("\n"):
+            if "==" not in line:
+                continue
+            package, version = line.split("==")
+            pip_freeze_requirements[package] = check_and_replace_version(
+                package, version, result["commit_date"]
+            )
+    except docker.errors.ContainerError as e:  # type: ignore[attr-defined]
+        logger.error(f"Error running pip freeze in container: {e}")
+        exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error running pip freeze: {e}")
+        exit(1)
 
     # update the requirements data
     time_traveled_requirements["pip_packages"] = pip_freeze_requirements
