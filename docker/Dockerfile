@@ -43,11 +43,15 @@ COPY github_setup.sh /github_setup.sh
 RUN chmod +x /github_setup.sh
 RUN /github_setup.sh
 
-# Run the script
+# Install pip requirements
 COPY requirements_collection.txt /requirements_collection.txt
-# RUN pip install -r requirements_collection.txt
+RUN pip install -r /requirements_collection.txt
+
+# Execute custom install commands if present
+COPY install_commands.sh /install_commands.sh
+RUN if [ -f /install_commands.sh ]; then chmod +x /install_commands.sh && /install_commands.sh; fi
 
 # change directory to the dir testbed
-RUN cd testbed
+WORKDIR /testbed
 
 RUN adduser --disabled-password --gecos 'dog' nonroot

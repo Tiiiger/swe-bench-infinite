@@ -1,4 +1,4 @@
-def localize_requirements(tree_result, commit_hash, commit_date):
+def localize_requirements(tree_result: dict[str, str], commit_hash: str, commit_date: str):
     # load prompt from prompts/requirements_localization.txt
     with open("prompts/requirements_localization.txt", "r") as f:
         prompt = f.read()

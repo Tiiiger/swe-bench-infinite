@@ -11,7 +11,9 @@ from typing import Dict, List, TypedDict
 from pipeline.localize import localize_requirements
 from anthropic_client import AnthropicClient
 from pipeline.collect import collect_requirements
+from pipeline.retry import retry_installation
 from version_finder import get_version_at_time
+from exceptions import SWEBenchError, GitError, AnthropicResponseError, DockerBuildError, RequirementsError
 
 class RequirementsData(TypedDict):
     """
@@ -27,6 +29,19 @@ class RequirementsData(TypedDict):
     apt_packages: List[str]
     pip_packages: Dict[str, str]
     install_commands: str
+
+class GitRepoData(TypedDict):
+    """
+    Type definition for git repository data structure.
+    
+    Attributes:
+        commit_hash (str): The commit hash that was checked out
+        commit_date (str): The date of the commit in YYYY-MM-DD format
+        tree_output (str): The output of the tree command showing the repo structure
+    """
+    commit_hash: str
+    commit_date: str
+    tree_output: str
 
 def setup_logger():
     """Set up and return a logger that writes to both console and a file."""
@@ -65,7 +80,7 @@ def setup_logger():
     return logger
 
 
-def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, logger=None):
+def clone_and_get_tree(repo_url: str, target_dir: str, date_from: str, date_to: str, tree_depth: int = 2, logger: logging.Logger = None) -> GitRepoData:
     """
     Clone a git repository if it doesn't exist, checkout a commit from a specific date range,
     and return the directory tree.
@@ -79,7 +94,10 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
         logger (logging.Logger): Logger for tracking operations
         
     Returns:
-        dict: A dictionary containing the tree output and the commit information
+        GitRepoData: A dictionary containing the tree output and the commit information
+        
+    Raises:
+        GitError: If any git operation fails
     """
     # save current working directory
     current_dir = os.getcwd()
@@ -87,12 +105,6 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
     # Move to playground
     logger.info("Changing to playground directory")
     os.chdir("playground")
-
-    if logger is None:
-        logger = logging.getLogger("clone_and_get_tree")
-        logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        logger.addHandler(handler)
     
     # Check if repo already exists
     if not os.path.exists(target_dir):
@@ -133,7 +145,7 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
     
     if not sorted_dates:
         logger.error(f"No commits found in date range {date_from} to {date_to}")
-        return {"error": "No commits found in specified date range"}
+        raise GitError(f"No commits found in date range {date_from} to {date_to}")
         
     earliest_date = sorted_dates[0]
     earliest_commit = commits[earliest_date][-1]  # get the last commit from the earliest date
@@ -147,7 +159,7 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
     if verify_result.returncode != 0:
         logger.error(f"Error: Commit {earliest_commit} does not exist!")
         logger.error(f"Error output: {verify_result.stderr}")
-        return {"error": f"Commit {earliest_commit} does not exist"}
+        raise GitError(f"Commit {earliest_commit} does not exist")
 
     # Check out the commit
     logger.info(f"Checking out commit {earliest_commit}...")
@@ -156,7 +168,7 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
     if checkout_result.returncode != 0:
         logger.error("Error checking out commit:")
         logger.error(checkout_result.stderr)
-        return {"error": f"Failed to checkout commit {earliest_commit}"}
+        raise GitError(f"Failed to checkout commit {earliest_commit}: {checkout_result.stderr}")
 
     logger.info(f"Successfully checked out commit {earliest_commit}")
 
@@ -174,7 +186,6 @@ def clone_and_get_tree(repo_url, target_dir, date_from, date_to, tree_depth=2, l
         "commit_hash": earliest_commit,
         "commit_date": earliest_date,
         "tree_output": tree_result.stdout,
-        "all_commits": commits
     }
 
 def dump_anthropic_response(response, logger):
@@ -274,17 +285,21 @@ def get_head_commit_timestamp(repo_path, logger=None):
         os.chdir(current_dir)
         logger.debug(f"Restored directory to {current_dir}")
 
-def process_localization(result, client, logger):
+def process_localization(result: GitRepoData, client, logger):
     """
     Process the localization of requirements for a given commit.
     
     Args:
-        result (dict): Dictionary containing tree_output, commit_hash, and commit_date
+        result (GitRepoData): Dictionary containing tree_output, commit_hash, and commit_date
         client (AnthropicClient): Client for making requests to Anthropic API
         logger (logging.Logger): Logger for tracking operations
         
     Returns:
         List[str]: List of file paths from the response
+        
+    Raises:
+        AnthropicResponseError: If there's an issue with the Anthropic API response
+        RequirementsError: If there's an issue parsing the requirements
     """
     # Localize requirements
     prompt = localize_requirements(result["tree_output"], result["commit_hash"], result["commit_date"])
@@ -305,12 +320,17 @@ def process_localization(result, client, logger):
     response_dump = dump_anthropic_response(response, logger)
     if text_block is None:
         logger.error("Expected text content block, got %s", content_block.type)
-        exit(1)
+        raise AnthropicResponseError("Expected text content block, got different content type")
     logger.info(response_dump)
 
     # regex grab the ```json block
     logger.info("Extracting JSON block...")
-    json_block = re.search(r"```json(.*)```", text_block, re.DOTALL).group(1)
+    json_match = re.search(r"```json(.*)```", text_block, re.DOTALL)
+    if not json_match:
+        logger.error("Could not find JSON block in response")
+        raise RequirementsError("Could not find JSON block in response")
+    
+    json_block = json_match.group(1)
     logger.info(json_block)
 
     # parse the json block
@@ -319,18 +339,18 @@ def process_localization(result, client, logger):
         json_data: List[str] = json.loads(json_block)
     except json.JSONDecodeError as e:
         logger.error("Error parsing JSON block: %s", e)
-        exit(1)
+        raise RequirementsError(f"Error parsing JSON block: {e}")
     logger.info(json_data)
     
     return json_data
 
-def write_docker_files(requirements_data: RequirementsData, result, repo_url, logger):
+def write_docker_files(requirements_data: RequirementsData, result: GitRepoData, repo_url, logger):
     """
     Write Docker configuration files based on requirements data.
     
     Args:
         requirements_data (RequirementsData): Dictionary containing requirements data
-        result (dict): Dictionary containing commit_hash and other info
+        result (GitRepoData): Dictionary containing commit_hash and other info
         repo_url (str): URL of the git repository
         logger (logging.Logger): Logger for tracking operations
     """
@@ -363,19 +383,20 @@ def write_docker_files(requirements_data: RequirementsData, result, repo_url, lo
     
     logger.info("Docker configuration files written successfully")
 
-def process_requirements_collection(file_contents, result, client, logger, repo_url):
+def process_requirements_collection(file_contents: dict[str, str], result: GitRepoData, client: AnthropicClient, logger: logging.Logger, repo_url: str):
     """
     Process the collection of requirements and build the Docker environment.
     
     Args:
         file_contents (dict): Dictionary mapping file paths to their contents
-        result (dict): Dictionary containing commit_hash and commit_date
+        result (GitRepoData): Dictionary containing commit_hash and commit_date
         client (AnthropicClient): Client for making requests to Anthropic API
         logger (logging.Logger): Logger for tracking operations
         repo_url (str): URL of the git repository
         
-    Returns:
-        int: Exit code from the Docker build process
+    Raises:
+        AnthropicResponseError: If there's an issue with the Anthropic API response
+        RequirementsError: If there's an issue parsing the requirements
     """
     # Collect requirements
     prompt = collect_requirements(file_contents, result["commit_hash"], result["commit_date"])
@@ -397,12 +418,17 @@ def process_requirements_collection(file_contents, result, client, logger, repo_
     response_dump = dump_anthropic_response(response, logger)
     if text_block is None:
         logger.error("Expected text content block, got %s", content_block.type)
-        exit(1)
+        raise AnthropicResponseError("Expected text content block, got different content type")
     logger.info(response_dump)
 
     # regex grab the ```json block
     logger.info("Extracting JSON block...")
-    json_block = re.search(r"```json(.*)```", text_block, re.DOTALL).group(1)
+    json_match = re.search(r"```json(.*)```", text_block, re.DOTALL)
+    if not json_match:
+        logger.error("Could not find JSON block in response")
+        raise RequirementsError("Could not find JSON block in response")
+    
+    json_block = json_match.group(1)
 
     # parse the json block
     logger.info("Parsing JSON block...")
@@ -420,11 +446,24 @@ def process_requirements_collection(file_contents, result, client, logger, repo_
         logger.info(f"Parsed requirements data: {requirements_data}")
     except json.JSONDecodeError as e:
         logger.error("Error parsing JSON block: %s", e)
-        exit(1)
+        raise RequirementsError(f"Error parsing JSON block: {e}")
 
     # Write Docker configuration files
     write_docker_files(requirements_data, result, repo_url, logger)
-    return exit_code
+
+def process_trial_and_error(file_contents, result: GitRepoData, client, logger, repo_url):
+    """
+    Process the trial and error of the Docker environment.
+    
+    Args:
+        file_contents (dict): Dictionary mapping file paths to their contents
+        result (GitRepoData): Dictionary containing commit_hash and commit_date
+        client (AnthropicClient): Client for making requests to Anthropic API
+        logger (logging.Logger): Logger for tracking operations
+        repo_url (str): URL of the git repository
+    """
+    prompt = retry_installation(file_contents, result, repo_url)
+    pass
 
 # Main execution
 if __name__ == "__main__":
@@ -443,18 +482,13 @@ if __name__ == "__main__":
         tree_depth=3,
         logger=logger
     )
-    
-    # Print the tree output
-    if "error" in result:
-        logger.error(f"Operation failed: {result['error']}")
-        exit(1)
 
     # Initialize Anthropic client
     client = AnthropicClient()
 
     # Process localization
     json_data = process_localization(result, client, logger)
-    
+        
     # Load file contents
     file_contents = load_file_contents(
         file_paths=json_data,
@@ -464,17 +498,15 @@ if __name__ == "__main__":
 
     # Process requirements collection and build Docker
     process_requirements_collection(file_contents, result, client, logger, REPO_URL)
-
-    
-    # run subprocess to build docker image
+        
+    # Run subprocess to build docker image
     output = subprocess.run(["docker", "build", "-t", "sweb.infinite.py", "./docker"], capture_output=True, text=True)
     print(output.stdout)
-    
-    # Get and check the exit code
-    exit_code = output.returncode
-    if exit_code == 0:
+        
+    # Check if Docker build was successful
+    if output.returncode != 0:
+        logger.error(f"Docker build failed with exit code {output.returncode}")
+        logger.error(f"Error output: {output.stderr}")
+        process_trial_and_error(file_contents, result, client, logger, REPO_URL)
+    else:
         logger.info("Docker build completed successfully")
-        return exit_code
-
-    logger.error(f"Docker build failed with exit code {exit_code}")
-    logger.error(f"Error output: {output.stderr}")
