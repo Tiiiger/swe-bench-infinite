@@ -321,6 +321,48 @@ def process_localization(result: GitRepoData, client, logger=None):
     
     return file_paths
 
+def time_travel_requirements(requirements_data: RequirementsData, commit_date: str, logger=None):
+    """
+    Update package versions in requirements data based on the commit date.
+    
+    Args:
+        requirements_data (RequirementsData): Dictionary containing the requirements data
+        commit_date (str): The date of the commit in YYYY-MM-DD format
+        logger (logging.Logger, optional): Logger for tracking operations
+        
+    Returns:
+        RequirementsData: Updated requirements data with appropriate versions
+    """
+    if logger:
+        logger.info(f"Time traveling requirements to {commit_date}")
+    
+    updated_requirements = {
+        # TODO: this should also use time travel
+        "python_version": requirements_data.get("python_version", "3.8"),
+        # TODO: we should have some automatic validation of the apt packages
+        "apt_packages": requirements_data.get("apt_packages", []),
+        "pip_packages": {},
+        "install_commands": requirements_data.get("install_commands", "")
+    }
+    
+    # Update pip package versions based on commit date
+    for package, version in requirements_data.get("pip_packages", {}).items():
+        if version.startswith("=="):
+            # Use specific version as is (remove == prefix)
+            updated_version = version[2:]
+        elif version.startswith(">=") or version == "":
+            # Find the appropriate version at the commit date
+            updated_version = get_version_at_time(package, commit_date)
+            if logger:
+                logger.info(f"Updated {package} version to {updated_version} for date {commit_date}")
+        else:
+            # Keep the version as is
+            updated_version = version
+            
+        updated_requirements["pip_packages"][package] = updated_version
+    
+    return updated_requirements
+
 def write_docker_files(requirements_data: RequirementsData, result: GitRepoData, repo_url, logger):
     """
     Write Docker configuration files based on requirements data.
@@ -347,10 +389,6 @@ def write_docker_files(requirements_data: RequirementsData, result: GitRepoData,
 
     with open("docker/pip_install.sh", "w") as f:
         for package, version in requirements_data['pip_packages'].items():
-            if version.startswith("=="):
-                version = version[2:]
-            elif version.startswith(">=") or version == "":
-                version = get_version_at_time(package, result["commit_date"])
             f.write(f"pip install {package}=={version}\n")
     
     # If install_commands is provided, write them to a file
@@ -460,7 +498,62 @@ def process_trial_and_error(file_contents, requirements_data, result: GitRepoDat
 
     prompt = retry_installation(file_contents, json.dumps(requirements_data, indent=2), result["commit_hash"], result["commit_date"], error_message)
     trial_logger.info(prompt)
-    trial_logger.info("Generated retry prompt")
+
+    # call anthropic client
+    response = client.create_message_with_retry(
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+    trial_logger.info("Response content:")
+    text_block = None
+    for content_block in response.content:
+        if content_block.type == "text" and content_block.text is not None:
+            text_block = content_block.text
+    trial_logger.info(text_block)
+
+    # dump to the log directory
+    with open(f"{trial_logger.handlers[1].baseFilename}", "w") as f:
+        f.write(text_block)
+
+    # regex grab the ```json block
+    trial_logger.info("Extracting JSON block...")
+    json_match = re.search(r"```json(.*)```", text_block, re.DOTALL)
+    if not json_match:
+        trial_logger.error("Could not find JSON block in response")
+        raise RequirementsError("Could not find JSON block in response")
+    
+    json_block = json_match.group(1)
+
+    # parse the json block
+    trial_logger.info("Parsing JSON block...")
+    try:
+        requirements_data_raw = json.loads(json_block)
+
+        # Ensure required fields are present
+        requirements_data: RequirementsData = {
+            "python_version": requirements_data_raw.get("python_version", "3.8"),
+            "apt_packages": requirements_data_raw.get("apt_packages", []),
+            "pip_packages": requirements_data_raw.get("pip_packages", {}),
+            "install_commands": requirements_data_raw.get("install_commands", "")
+        }
+        
+        trial_logger.info(f"Parsed requirements data: {requirements_data}")
+    except json.JSONDecodeError as e:
+        trial_logger.error("Error parsing JSON block: %s", e)
+        raise RequirementsError(f"Error parsing JSON block: {e}")
+
+    # Save to exps directory for debugging purposes
+    # Extract timestamp from the logger's file handler
+    exp_dir = os.path.dirname(trial_logger.handlers[1].baseFilename)
+    trial_logger.info(f"Saving trial and error results to {exp_dir}")
+    with open(os.path.join(exp_dir, "trial_and_error_output.json"), "w") as f:
+        json.dump(requirements_data, f, indent=4)
+
+    return requirements_data
 
 # Main execution
 if __name__ == "__main__":
@@ -525,7 +618,8 @@ if __name__ == "__main__":
             logger.info(f"Loaded requirements data: {requirements_data}")
             
         # Write Docker configuration files
-        write_docker_files(requirements_data, result, REPO_URL, logger)
+        time_traveled_requirements = time_travel_requirements(requirements_data, result["commit_date"], logger)
+        write_docker_files(time_traveled_requirements, result, REPO_URL, logger)
     else:
         # Process localization - now creates its own logger
         file_paths = process_localization(result, client, logger)
@@ -541,7 +635,8 @@ if __name__ == "__main__":
         requirements_data = process_requirements_collection(file_contents, result, client, logger, REPO_URL)
 
     # Write Docker configuration files
-    write_docker_files(requirements_data, result, REPO_URL, logger)
+    time_traveled_requirements = time_travel_requirements(requirements_data, result["commit_date"], logger)
+    write_docker_files(time_traveled_requirements, result, REPO_URL, logger)
         
     # Run subprocess to build docker image
     subprocess.run(["docker", "build", "-t", "testbed-base:latest", "-f", "./docker/Dockerfile.base", "./docker"], capture_output=True, text=True)
@@ -552,6 +647,6 @@ if __name__ == "__main__":
         logger.error(f"Docker build failed with exit code {output.returncode}")
         logger.error(f"Error output: {output.stderr}")
         error_message = output.stderr
-        process_trial_and_error(file_contents, requirements_data, result, error_message, logger)
+        process_trial_and_error(file_contents, time_traveled_requirements, result, error_message, logger)
     else:
         logger.info("Docker build completed successfully")
