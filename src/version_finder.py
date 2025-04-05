@@ -33,7 +33,7 @@ def get_versions_with_requests(package_name):
     for card in release_cards:
         try:
             version_element = card.find("p", class_="release__version")
-            version_number = version_element.text.strip()
+            version_number = version_element.text.strip().split("\n")[0]
 
             version_date = card.find("p", class_="release__version-date").find("time")
             datetime_attr = version_date.get("datetime")
@@ -81,7 +81,7 @@ def get_versions_with_selenium(package_name):
         for card in release_cards:
             try:
                 version_element = card.find_element(By.CLASS_NAME, "release__version")
-                version_number = version_element.text.strip()
+                version_number = version_element.text.strip().split("\n")[0]
 
                 version_date = card.find_element(
                     By.CLASS_NAME, "release__version-date"

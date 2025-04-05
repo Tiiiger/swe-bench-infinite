@@ -20,7 +20,7 @@ RUN /github_setup.sh
 # Install pip requirements
 COPY pip_install.sh /pip_install.sh
 RUN chmod +x /pip_install.sh
-RUN /pip_install.sh
+RUN source /opt/miniforge/etc/profile.d/conda.sh && conda activate testbed && /pip_install.sh
 
 # Execute custom install commands if present
 # COPY install_commands.sh /install_commands.sh

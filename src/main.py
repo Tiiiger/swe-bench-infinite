@@ -405,6 +405,8 @@ def write_docker_files(
         )
 
     with open("docker/pip_install.sh", "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write("mamba activate testbed\n")
         for package, version in requirements_data["pip_packages"].items():
             f.write(f"pip install {package}=={version}\n")
 
@@ -656,8 +658,8 @@ if __name__ == "__main__":
     result = clone_and_get_tree(
         repo_url=REPO_URL,
         target_dir="scikit-learn",
-        date_from="2019-01-01",
-        date_to="2019-01-31",
+        date_from="2019-05-01",
+        date_to="2019-05-31",
         tree_depth=3,
         logger=logger,
     )
@@ -761,27 +763,27 @@ if __name__ == "__main__":
             logger.info("After trial and error, Docker build completed successfully")
             logger.info(output.stdout)
 
-    # Get pip freeze requirements from the built Docker container
-    pip_freeze_requirements = get_pip_freeze_requirements(result=result, logger=logger)
+    # # Get pip freeze requirements from the built Docker container
+    # pip_freeze_requirements = get_pip_freeze_requirements(result=result, logger=logger)
 
-    # Update the requirements data
-    time_traveled_requirements["pip_packages"] = pip_freeze_requirements
+    # # Update the requirements data
+    # time_traveled_requirements["pip_packages"] = pip_freeze_requirements
 
-    # Write the docker files again
-    write_docker_files(
-        requirements_data=time_traveled_requirements,
-        result=result,
-        repo_url=REPO_URL,
-        logger=logger,
-    )
+    # # Write the docker files again
+    # write_docker_files(
+    #     requirements_data=time_traveled_requirements,
+    #     result=result,
+    #     repo_url=REPO_URL,
+    #     logger=logger,
+    # )
 
-    # Build the docker image again
-    logger.info("Building docker image (testbed) with time traveled pip freeze requirements")
-    output = build_docker_images(logger=logger)
-    if output.returncode != 0:
-        logger.error(f"Docker build failed with exit code {output.returncode}")
-        logger.error(f"Error output: {output.stderr}")
-        exit(1)
-    else:
-        logger.info(output.stdout)
-        logger.info("Docker image built successfully")
+    # # Build the docker image again
+    # logger.info("Building docker image (testbed) with time traveled pip freeze requirements")
+    # output = build_docker_images(logger=logger)
+    # if output.returncode != 0:
+    #     logger.error(f"Docker build failed with exit code {output.returncode}")
+    #     logger.error(f"Error output: {output.stderr}")
+    #     exit(1)
+    # else:
+    #     logger.info(output.stdout)
+    #     logger.info("Docker image built successfully")
