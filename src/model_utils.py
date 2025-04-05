@@ -4,13 +4,14 @@ import os
 import re
 from typing import Any, Dict
 
+from anthropic_client import AnthropicClient
 from exceptions import AnthropicResponseError, RequirementsError
 
 from exp_utils import dump_anthropic_response
 
 
 def anthropic_generate_json(
-    prompt: str, client, logger=None, output_filename="output.json"
+    prompt: str, logger=None, output_filename="output.json"
 ) -> Dict[str, Any]:
     """
     Abstract function to handle Anthropic API calls, JSON extraction, and response logging.
@@ -36,6 +37,8 @@ def anthropic_generate_json(
         formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+
+    client = AnthropicClient()
 
     logger.info("Sending prompt to Anthropic API...")
     response = client.create_message_with_retry(messages=[{"role": "user", "content": prompt}])

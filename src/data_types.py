@@ -31,3 +31,4 @@ class GitRepoData(TypedDict):
     commit_hash: str
     commit_date: str
     tree_output: str
+    repo_url: str

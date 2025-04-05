@@ -4,7 +4,7 @@ from data_types import GitRepoData, RequirementsData
 
 
 def write_docker_files(
-    requirements_data: RequirementsData, result: GitRepoData, repo_url: str, logger: logging.Logger
+    requirements_data: RequirementsData, git_data: GitRepoData, logger: logging.Logger
 ) -> None:
     """
     Write Docker configuration files based on requirements data.
@@ -22,9 +22,9 @@ def write_docker_files(
 
     # write to github_setup.sh
     with open("docker/github_setup.sh", "w") as f:
-        f.write(f"git clone {repo_url} testbed\n")
+        f.write(f"git clone {git_data['repo_url']} testbed\n")
         f.write("cd testbed\n")
-        f.write(f"git checkout {result['commit_hash']}\n")
+        f.write(f"git checkout {git_data['commit_hash']}\n")
 
     with open("docker/apt_install.sh", "w") as f:
         f.write(
