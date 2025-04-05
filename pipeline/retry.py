@@ -1,6 +1,13 @@
 from pipeline.utils import make_file_contents_str
 
-def retry_installation(file_contents: dict[str, str], requirements_json: str, commit_hash: str, commit_date: str, error_message: str):
+
+def retry_installation(
+    file_contents: dict[str, str],
+    requirements_json: str,
+    commit_hash: str,
+    commit_date: str,
+    error_message: str,
+):
     # load prompt from prompts/trial_and_error.txt
     with open("prompts/trial_and_error.txt", "r") as f:
         prompt = f.read()
@@ -11,6 +18,7 @@ def retry_installation(file_contents: dict[str, str], requirements_json: str, co
     prompt = prompt.replace("{error_message}", error_message)
     print(prompt)
     return prompt
+
 
 if __name__ == "__main__":
     pass

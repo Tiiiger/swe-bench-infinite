@@ -1,4 +1,4 @@
-def localize_requirements(tree_result: dict[str, str], commit_hash: str, commit_date: str):
+def localize_requirements(tree_result: str, commit_hash: str, commit_date: str):
     # load prompt from prompts/requirements_localization.txt
     with open("prompts/requirements_localization.txt", "r") as f:
         prompt = f.read()
@@ -8,6 +8,7 @@ def localize_requirements(tree_result: dict[str, str], commit_hash: str, commit_
     prompt = prompt.replace("{top_k}", str(10))
     print(prompt)
     return prompt
+
 
 if __name__ == "__main__":
     pass

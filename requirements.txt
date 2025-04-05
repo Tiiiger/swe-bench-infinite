@@ -1,2 +1,7 @@
 requests
 beautifulsoup4
+
+# Dev dependencies
+mypy
+ruff
+pre-commit

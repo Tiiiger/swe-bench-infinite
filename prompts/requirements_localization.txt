@@ -28,4 +28,4 @@ For example:
 ["requirements.txt", "requirements-dev.txt", "pyproject.toml", "CONTRIBUTING.md", "README.md"]
 ```
 
-Now, begin your work! 
+Now, begin your work!

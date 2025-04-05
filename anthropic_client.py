@@ -1,25 +1,30 @@
-import os
-import time
 import logging
+import os
+import random
+import time
+
 import anthropic
-from anthropic.types import Message, MessageParam, ContentBlock
+from anthropic.types import Message
 
 # Configure module logger (non-propagating)
 logger = logging.getLogger(__name__)
 if not logger.handlers:  # Only add handler if it doesn't have one
     handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 # Prevent propagation to avoid duplicate logs
 logger.propagate = False
 
+
 class AnthropicClient:
-    def __init__(self, max_retries: int = 5, initial_backoff: float = 1.0, max_backoff: float = 60.0):
+    def __init__(
+        self, max_retries: int = 5, initial_backoff: float = 1.0, max_backoff: float = 60.0
+    ):
         """
         Initialize Anthropic client with retry capabilities.
-        
+
         Args:
             max_retries: Maximum number of retries for rate-limited requests
             initial_backoff: Initial backoff time in seconds
@@ -29,32 +34,30 @@ class AnthropicClient:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
-        
+
         self.client = anthropic.Anthropic(api_key=api_key)
         self.max_retries = max_retries
         self.initial_backoff = initial_backoff
         self.max_backoff = max_backoff
-    
-    def create_message_with_retry(self, 
-                                  messages,
-                                  model: str = "claude-3-7-sonnet-latest", 
-                                  max_tokens: int = 8192,
-                                  **kwargs) -> Message:
+
+    def create_message_with_retry(
+        self, messages, model: str = "claude-3-7-sonnet-latest", max_tokens: int = 8192, **kwargs
+    ) -> Message:
         """
         Send a message to the Anthropic API with retry logic for rate limits.
-        
+
         Args:
             messages: List of message parameters to send
             model: Model name to use
             max_tokens: Maximum number of tokens in the response
             **kwargs: Additional arguments to pass to the create method
-            
+
         Returns:
             Message response from the API
         """
         current_retry = 0
         backoff_time = self.initial_backoff
-        
+
         while True:
             try:
                 return self.client.messages.create(
@@ -62,41 +65,41 @@ class AnthropicClient:
                     max_tokens=max_tokens,
                     messages=messages,
                     thinking={"type": "enabled", "budget_tokens": 4096},
-                    **kwargs
+                    **kwargs,
                 )
             except anthropic.RateLimitError as e:
                 current_retry += 1
                 if current_retry > self.max_retries:
                     logger.error(f"Rate limit exceeded after {self.max_retries} retries")
                     raise
-                
+
                 # Get retry-after header if available, otherwise use exponential backoff
                 retry_after = getattr(e, "retry_after", None)
                 if retry_after is not None:
                     sleep_time = float(retry_after)
                 else:
                     # Exponential backoff with jitter
-                    sleep_time = min(backoff_time * (1.5 + 0.5 * (2 * time.random() - 1)), self.max_backoff)
+                    sleep_time = min(
+                        backoff_time * (1.5 + 0.5 * (2 * random.random() - 1)), self.max_backoff
+                    )
                     backoff_time = sleep_time
-                
-                logger.warning(f"Rate limit hit. Retrying in {sleep_time:.2f} seconds (attempt {current_retry}/{self.max_retries})")
+
+                logger.warning(
+                    f"Rate limit hit. Retrying in {sleep_time:.2f} seconds (attempt {current_retry}/{self.max_retries})"
+                )
                 time.sleep(sleep_time)
             except Exception as e:
                 logger.error(f"Error calling Anthropic API: {e}")
                 raise
 
+
 # Example usage
 if __name__ == "__main__":
     # Make sure to set ANTHROPIC_API_KEY environment variable before running
     client = AnthropicClient()
-    
+
     response = client.create_message_with_retry(
-        messages=[
-            {
-                "role": "user",
-                "content": "Hello, Claude! How are you today?"
-            }
-        ]
+        messages=[{"role": "user", "content": "Hello, Claude! How are you today?"}]
     )
     print("Response content:")
     for content_block in response.content:

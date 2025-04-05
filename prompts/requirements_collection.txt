@@ -1,7 +1,7 @@
 You are a software engineer trying to install a development environment for the open source project scikit-learn.
 Specifically, you are trying to run test on commit {commit_hash}, which is a commit from {commit_date}.
 
-You have previously identified the following files as potentially containing information about the requirements. 
+You have previously identified the following files as potentially containing information about the requirements.
 Your job is now to read through the contents of these files and extract the requirements.
 When reading these files, it is important to understand that you are running in a ubuntu 20.04 docker container. You should
 focus on instructions relevant to linux / ubuntu 20.04.
@@ -34,7 +34,7 @@ However, if the files only mention python >= 3.6, you should choose 3.6 and not 
    - Absolute version: if the files mention a specific version, use that version.
    - Relative version: if the files mention a relative version, such as a minimum version, include it as ">=X.Y.Z".
    - No version: if the files do not mention a specific or relative version, leave the value empty.
-4. After getting your results, we (the developers) will run apt, conda, and pip commands to install the environment you specified. 
+4. After getting your results, we (the developers) will run apt, conda, and pip commands to install the environment you specified.
 Assume that the dependencies you specified are installed correctly, what bash commands do we need to run to install the development environment?
 For example, "pip install -e ."  is a usual command to install the development environment. However, you may need to add more flags to the command, specify install options, add environment variables, etc.
 
