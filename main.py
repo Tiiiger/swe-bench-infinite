@@ -14,6 +14,7 @@ from pipeline.collect import collect_requirements
 from pipeline.retry import retry_installation
 from version_finder import get_version_at_time
 from exceptions import SWEBenchError, GitError, AnthropicResponseError, DockerBuildError, RequirementsError
+from logger import setup_logger, setup_child_logger
 
 class RequirementsData(TypedDict):
     """
@@ -43,43 +44,6 @@ class GitRepoData(TypedDict):
     commit_date: str
     tree_output: str
 
-def setup_logger():
-    """Set up and return a logger that writes to both console and a file."""
-    # Create timestamp for the log directory
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Create log directory
-    log_dir = f"exps/{timestamp}"
-    pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
-    
-    # Configure logger
-    log_file = f"{log_dir}/clone_and_get_tree.log"
-    
-    # Create logger
-    logger = logging.getLogger("clone_and_get_tree")
-    logger.setLevel(logging.DEBUG)
-    
-    # Create console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    
-    # Create file handler
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
-    
-    # Create formatter
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-    
-    # Add handlers to logger
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-    
-    logger.info(f"Logging to {log_file}")
-    return logger
-
-
 def clone_and_get_tree(repo_url: str, target_dir: str, date_from: str, date_to: str, tree_depth: int = 2, logger: logging.Logger = None) -> GitRepoData:
     """
     Clone a git repository if it doesn't exist, checkout a commit from a specific date range,
@@ -99,38 +63,52 @@ def clone_and_get_tree(repo_url: str, target_dir: str, date_from: str, date_to: 
     Raises:
         GitError: If any git operation fails
     """
+    # Create a specific logger for clone_and_get_tree if a parent logger is provided
+    if logger:
+        # Extract timestamp from parent logger
+        clone_logger = setup_child_logger("clone_and_get_tree", logger)
+    else:
+        # Create a standalone logger
+        clone_logger = logging.getLogger("clone_and_get_tree")
+        clone_logger.setLevel(logging.DEBUG)
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        clone_logger.addHandler(console_handler)
+    
     # save current working directory
     current_dir = os.getcwd()
         
     # Move to playground
-    logger.info("Changing to playground directory")
+    clone_logger.info("Changing to playground directory")
     os.chdir("playground")
     
     # Check if repo already exists
     if not os.path.exists(target_dir):
         # Clone the repo
-        logger.info(f"Cloning repository {repo_url} to {target_dir}...")
+        clone_logger.info(f"Cloning repository {repo_url} to {target_dir}...")
         subprocess.run(["git", "clone", repo_url, target_dir])
-        logger.info(f"Repository cloned successfully to {target_dir}")
+        clone_logger.info(f"Repository cloned successfully to {target_dir}")
     else:
-        logger.info(f"Repository already exists at {target_dir}, skipping clone")
+        clone_logger.info(f"Repository already exists at {target_dir}, skipping clone")
 
     # Move into the repo directory
-    logger.debug(f"Changing directory to {target_dir}")
+    clone_logger.debug(f"Changing directory to {target_dir}")
     os.chdir(target_dir)
 
     # Check out back to main branch
-    logger.info(f"Checking out back to main branch")
+    clone_logger.info(f"Checking out back to main branch")
     subprocess.run(["git", "checkout", "main"], capture_output=True, text=True)
 
     # Get commit history for the date range and capture output
-    logger.info(f"Getting commit history from {date_from} to {date_to}...")
+    clone_logger.info(f"Getting commit history from {date_from} to {date_to}...")
     result = subprocess.run(["git", "log", f"--since='{date_from}'", f"--until='{date_to}'", 
                             "--pretty=format:%H %ad", "--date=short"], 
                            capture_output=True, text=True, check=True)
 
     # Parse the output into a dictionary
-    logger.debug("Parsing commit history...")
+    clone_logger.debug("Parsing commit history...")
     commits = {}
     for line in result.stdout.strip().split('\n'):
         if line:  # skip empty lines
@@ -138,46 +116,46 @@ def clone_and_get_tree(repo_url: str, target_dir: str, date_from: str, date_to: 
             if date not in commits:
                 commits[date] = []
             commits[date].append(commit_hash)
-            logger.debug(f"Found commit {commit_hash} from {date}")
+            clone_logger.debug(f"Found commit {commit_hash} from {date}")
 
     # Get the earliest commit in the date range
     sorted_dates = sorted(commits.keys())
     
     if not sorted_dates:
-        logger.error(f"No commits found in date range {date_from} to {date_to}")
+        clone_logger.error(f"No commits found in date range {date_from} to {date_to}")
         raise GitError(f"No commits found in date range {date_from} to {date_to}")
         
     earliest_date = sorted_dates[0]
     earliest_commit = commits[earliest_date][-1]  # get the last commit from the earliest date
 
-    logger.info(f"Earliest commit from {earliest_date}: {earliest_commit}")
+    clone_logger.info(f"Earliest commit from {earliest_date}: {earliest_commit}")
 
     # Verify the commit exists
-    logger.debug(f"Verifying commit {earliest_commit} exists...")
+    clone_logger.debug(f"Verifying commit {earliest_commit} exists...")
     verify_result = subprocess.run(["git", "cat-file", "-e", earliest_commit], 
                                  capture_output=True, text=True)
     if verify_result.returncode != 0:
-        logger.error(f"Error: Commit {earliest_commit} does not exist!")
-        logger.error(f"Error output: {verify_result.stderr}")
+        clone_logger.error(f"Error: Commit {earliest_commit} does not exist!")
+        clone_logger.error(f"Error output: {verify_result.stderr}")
         raise GitError(f"Commit {earliest_commit} does not exist")
 
     # Check out the commit
-    logger.info(f"Checking out commit {earliest_commit}...")
+    clone_logger.info(f"Checking out commit {earliest_commit}...")
     checkout_result = subprocess.run(["git", "checkout", earliest_commit], 
                                    capture_output=True, text=True)
     if checkout_result.returncode != 0:
-        logger.error("Error checking out commit:")
-        logger.error(checkout_result.stderr)
+        clone_logger.error("Error checking out commit:")
+        clone_logger.error(checkout_result.stderr)
         raise GitError(f"Failed to checkout commit {earliest_commit}: {checkout_result.stderr}")
 
-    logger.info(f"Successfully checked out commit {earliest_commit}")
+    clone_logger.info(f"Successfully checked out commit {earliest_commit}")
 
     # Get the repo tree
-    logger.info(f"Generating tree with depth {tree_depth}...")
+    clone_logger.info(f"Generating tree with depth {tree_depth}...")
     tree_result = subprocess.run(f"tree -L {tree_depth}", shell=True, 
                                capture_output=True, text=True)
     
-    logger.debug("Returning results")
+    clone_logger.debug("Returning results")
 
     # Move back to the current directory
     os.chdir(current_dir)
@@ -285,14 +263,14 @@ def get_head_commit_timestamp(repo_path, logger=None):
         os.chdir(current_dir)
         logger.debug(f"Restored directory to {current_dir}")
 
-def process_localization(result: GitRepoData, client, logger):
+def process_localization(result: GitRepoData, client, logger=None):
     """
     Process the localization of requirements for a given commit.
     
     Args:
         result (GitRepoData): Dictionary containing tree_output, commit_hash, and commit_date
         client (AnthropicClient): Client for making requests to Anthropic API
-        logger (logging.Logger): Logger for tracking operations
+        logger (logging.Logger, optional): Parent logger for tracking operations
         
     Returns:
         List[str]: List of file paths from the response
@@ -301,9 +279,12 @@ def process_localization(result: GitRepoData, client, logger):
         AnthropicResponseError: If there's an issue with the Anthropic API response
         RequirementsError: If there's an issue parsing the requirements
     """
+    # Create specific logger for this function
+    loc_logger = setup_child_logger("localization", logger, "localization")
+    
     # Localize requirements
     prompt = localize_requirements(result["tree_output"], result["commit_hash"], result["commit_date"])
-    logger.info(f"Localizing requirements for {result['commit_hash']} from {result['commit_date']}")
+    loc_logger.info(f"Localizing requirements for {result['commit_hash']} from {result['commit_date']}")
     response = client.create_message_with_retry(
         messages=[
             {
@@ -312,35 +293,37 @@ def process_localization(result: GitRepoData, client, logger):
             }
         ]
     )
-    logger.info("Response content:")
+    loc_logger.info("Response content:")
     text_block = None
     for content_block in response.content:
         if content_block.type == "text" and content_block.text is not None:
             text_block = content_block.text
-    response_dump = dump_anthropic_response(response, logger)
+    response_dump = dump_anthropic_response(response, loc_logger)
     if text_block is None:
-        logger.error("Expected text content block, got %s", content_block.type)
+        loc_logger.error("Expected text content block, got %s", content_block.type)
         raise AnthropicResponseError("Expected text content block, got different content type")
-    logger.info(response_dump)
+    # dump to the log directory
+    with open(f"{loc_logger.handlers[1].baseFilename}", "w") as f:
+        f.write(response_dump)
 
     # regex grab the ```json block
-    logger.info("Extracting JSON block...")
+    loc_logger.info("Extracting JSON block...")
     json_match = re.search(r"```json(.*)```", text_block, re.DOTALL)
     if not json_match:
-        logger.error("Could not find JSON block in response")
+        loc_logger.error("Could not find JSON block in response")
         raise RequirementsError("Could not find JSON block in response")
     
     json_block = json_match.group(1)
-    logger.info(json_block)
+    loc_logger.info(json_block)
 
     # parse the json block
-    logger.info("Parsing JSON block...")
+    loc_logger.info("Parsing JSON block...")
     try:
         json_data: List[str] = json.loads(json_block)
     except json.JSONDecodeError as e:
-        logger.error("Error parsing JSON block: %s", e)
+        loc_logger.error("Error parsing JSON block: %s", e)
         raise RequirementsError(f"Error parsing JSON block: {e}")
-    logger.info(json_data)
+    loc_logger.info(json_data)
     
     return json_data
 
@@ -383,7 +366,7 @@ def write_docker_files(requirements_data: RequirementsData, result: GitRepoData,
     
     logger.info("Docker configuration files written successfully")
 
-def process_requirements_collection(file_contents: dict[str, str], result: GitRepoData, client: AnthropicClient, logger: logging.Logger, repo_url: str):
+def process_requirements_collection(file_contents: dict[str, str], result: GitRepoData, client: AnthropicClient, logger=None, repo_url: str = None):
     """
     Process the collection of requirements and build the Docker environment.
     
@@ -391,16 +374,19 @@ def process_requirements_collection(file_contents: dict[str, str], result: GitRe
         file_contents (dict): Dictionary mapping file paths to their contents
         result (GitRepoData): Dictionary containing commit_hash and commit_date
         client (AnthropicClient): Client for making requests to Anthropic API
-        logger (logging.Logger): Logger for tracking operations
-        repo_url (str): URL of the git repository
+        logger (logging.Logger, optional): Parent logger for tracking operations
+        repo_url (str, optional): URL of the git repository
         
     Raises:
         AnthropicResponseError: If there's an issue with the Anthropic API response
         RequirementsError: If there's an issue parsing the requirements
     """
+    # Create specific logger for this function
+    req_logger = setup_child_logger("requirements_collection", logger, "requirements")
+    
     # Collect requirements
     prompt = collect_requirements(file_contents, result["commit_hash"], result["commit_date"])
-    logger.info(prompt)
+    req_logger.info(prompt)
 
     response = client.create_message_with_retry(
         messages=[
@@ -410,28 +396,31 @@ def process_requirements_collection(file_contents: dict[str, str], result: GitRe
             }
         ]
     )
-    logger.info("Response content:")
+    req_logger.info("Response content:")
     text_block = None
     for content_block in response.content:
         if content_block.type == "text" and content_block.text is not None:
             text_block = content_block.text
-    response_dump = dump_anthropic_response(response, logger)
+    response_dump = dump_anthropic_response(response, req_logger)
     if text_block is None:
-        logger.error("Expected text content block, got %s", content_block.type)
+        req_logger.error("Expected text content block, got %s", content_block.type)
         raise AnthropicResponseError("Expected text content block, got different content type")
-    logger.info(response_dump)
+    req_logger.info(response_dump)
+    # dump to the log directory
+    with open(f"{req_logger.handlers[1].baseFilename}", "w") as f:
+        f.write(response_dump)
 
     # regex grab the ```json block
-    logger.info("Extracting JSON block...")
+    req_logger.info("Extracting JSON block...")
     json_match = re.search(r"```json(.*)```", text_block, re.DOTALL)
     if not json_match:
-        logger.error("Could not find JSON block in response")
+        req_logger.error("Could not find JSON block in response")
         raise RequirementsError("Could not find JSON block in response")
     
     json_block = json_match.group(1)
 
     # parse the json block
-    logger.info("Parsing JSON block...")
+    req_logger.info("Parsing JSON block...")
     try:
         requirements_data_raw = json.loads(json_block)
         
@@ -443,31 +432,37 @@ def process_requirements_collection(file_contents: dict[str, str], result: GitRe
             "install_commands": requirements_data_raw.get("install_commands", "")
         }
         
-        logger.info(f"Parsed requirements data: {requirements_data}")
+        req_logger.info(f"Parsed requirements data: {requirements_data}")
     except json.JSONDecodeError as e:
-        logger.error("Error parsing JSON block: %s", e)
+        req_logger.error("Error parsing JSON block: %s", e)
         raise RequirementsError(f"Error parsing JSON block: {e}")
 
     # Write Docker configuration files
-    write_docker_files(requirements_data, result, repo_url, logger)
+    write_docker_files(requirements_data, result, repo_url, req_logger)
 
-def process_trial_and_error(file_contents, result: GitRepoData, error_message: str, logger):
+def process_trial_and_error(file_contents, requirements_json, result: GitRepoData, error_message: str, logger=None):
     """
     Process the trial and error of the Docker environment.
     
     Args:
         file_contents (dict): Dictionary mapping file paths to their contents
+        requirements_json: The requirements data that failed
         result (GitRepoData): Dictionary containing commit_hash and commit_date
-        client (AnthropicClient): Client for making requests to Anthropic API
-        logger (logging.Logger): Logger for tracking operations
-        repo_url (str): URL of the git repository
+        error_message (str): The error message from the failed Docker build
+        logger (logging.Logger, optional): Parent logger for tracking operations
     """
+    # Create specific logger for this function
+    trial_logger = setup_child_logger("trial_and_error", logger, "trial_and_error")
+    
+    trial_logger.info("Starting trial and error process for failed Docker build")
+    trial_logger.info(f"Error message: {error_message}")
+    
     prompt = retry_installation(file_contents, result["commit_hash"], result["commit_date"], error_message)
-    pass
+    trial_logger.info("Generated retry prompt")
 
 # Main execution
 if __name__ == "__main__":
-    # Set up logger
+    # Set up main logger
     logger = setup_logger()
 
     REPO_URL = "https://github.com/scikit-learn/scikit-learn.git"
@@ -486,7 +481,7 @@ if __name__ == "__main__":
     # Initialize Anthropic client
     client = AnthropicClient()
 
-    # Process localization
+    # Process localization - now creates its own logger
     json_data = process_localization(result, client, logger)
         
     # Load file contents
@@ -496,12 +491,11 @@ if __name__ == "__main__":
         logger=logger
     )
 
-    # Process requirements collection and build Docker
+    # Process requirements collection - now creates its own logger
     process_requirements_collection(file_contents, result, client, logger, REPO_URL)
         
     # Run subprocess to build docker image
-    output = subprocess.run(["docker", "build", "-t", "sweb.infinite.py", "./docker"], capture_output=True, text=True)
-    print(output.stdout)
+    output = subprocess.run(["docker", "build", "-t", "testbed:latest", "-f", "./docker/Dockerfile", "./docker"], capture_output=True, text=True)
         
     # Check if Docker build was successful
     if output.returncode != 0:
