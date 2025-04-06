@@ -8,15 +8,17 @@ from typing import Dict, Optional
 import datasets
 from anthropic_client import AnthropicClient
 from data_types import GitRepoData, RequirementsData
-from docker_utils import build_docker_images, write_docker_files
+from docker_utils import build_docker_images, run_test_in_container, write_docker_files
+from exceptions import RequirementsError
 from git_utils import clone_and_get_tree, load_file_contents
+from pipeline.build_retry import retry_installation
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
-from pipeline.retry import retry_installation
+from pipeline.test_retry import retry_test
 from version_finder import check_and_replace_version, get_version_at_time
 
 import docker  # type: ignore
-from logger import setup_child_logger, setup_logger
+from logger import setup_logger
 from model_utils import anthropic_generate_json
 
 
@@ -39,7 +41,7 @@ def process_localization(
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    loc_logger = setup_child_logger(
+    loc_logger = setup_logger(
         logger_name="localization", parent_logger=logger, subfolder="localization"
     )
 
@@ -129,7 +131,7 @@ def process_requirements_collection(
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    req_logger = setup_child_logger(
+    req_logger = setup_logger(
         logger_name="requirements_collection", parent_logger=logger, subfolder="requirements"
     )
 
@@ -179,7 +181,7 @@ def process_trial_and_error(
     """
     # Create specific logger for this function
     print("trial_and_error parent logger: ", logger)
-    trial_logger = setup_child_logger(
+    trial_logger = setup_logger(
         logger_name="trial_and_error", parent_logger=logger, subfolder="trial_and_error"
     )
 
@@ -340,11 +342,13 @@ if __name__ == "__main__":
     # a specific version that doesn't involve trial and error
     # if trial and error has been run, this caching logic wouldn't be valid
     if not args.debug:
+        build_logger = setup_logger(
+            logger_name="first_build", parent_logger=logger, subfolder="first_build"
+        )
         write_docker_files(
             requirements_data=time_traveled_requirements,
             git_data=git_data,
-            logger=logger,
-            build_name="first_build",
+            logger=build_logger,
         )
 
     # Build Docker images
@@ -353,27 +357,89 @@ if __name__ == "__main__":
     # Check if Docker build was successful
     num_trial = 0
     while build_output.returncode != 0 and num_trial < 3:
-        logger.error(f"Docker build failed with exit code {build_output.returncode}")
-        logger.error(f"Error output: {build_output.stderr}")
-        logger.info(f"Trial {num_trial} failed")
+        trial_logger = setup_logger(
+            logger_name=f"trial_and_error_{num_trial}",
+            parent_logger=logger,
+            subfolder="trial_and_error",
+        )
+        trial_logger.error(f"Docker build failed with exit code {build_output.returncode}")
+        trial_logger.error(f"Error output: {build_output.stderr}")
+        trial_logger.info(f"Trial {num_trial} failed")
         error_message = build_output.stderr
         time_traveled_requirements = process_trial_and_error(
             file_contents=file_contents,
             requirements_data=time_traveled_requirements,
             git_data=git_data,
             error_message=error_message,
-            logger=logger,
+            logger=trial_logger,
         )
         write_docker_files(
             requirements_data=time_traveled_requirements,
             git_data=git_data,
-            logger=logger,
-            build_name=f"trial_and_error_{num_trial}",
+            logger=trial_logger,
         )
-        build_output = build_docker_images(logger=logger, build_name=f"trial_and_error_{num_trial}")
+        build_output = build_docker_images(
+            logger=trial_logger, build_name=f"trial_and_error_{num_trial}"
+        )
         num_trial += 1
         if build_output.returncode == 0:
             logger.info("After trial and error, Docker build completed successfully")
+
+    # Run the test in a Docker container
+    test_command = (
+        "pytest sklearn/cluster/tests/test_affinity_propagation.py::test_affinity_propagation"
+    )
+    exit_code, logs = run_test_in_container(test_command, logger)
+
+    num_test_retry = 0
+    while exit_code != 0 and num_test_retry < 3:
+        test_retry_logger = setup_logger(
+            logger_name=f"test_retry_{num_test_retry}", parent_logger=logger, subfolder="test_retry"
+        )
+        error_message = logs
+        prompt = retry_test(
+            file_contents=file_contents,
+            requirements_json=json.dumps(time_traveled_requirements, indent=2),
+            commit_hash=git_data["commit_hash"],
+            commit_date=git_data["commit_date"],
+            error_message=error_message,
+            test_command=test_command,
+        )
+        try:
+            requirements_data_raw = anthropic_generate_json(
+                prompt=prompt,
+                logger=test_retry_logger,
+                output_filename="test_retry_output.json",
+            )
+            # NOTE: I hate python typing ... this is so immature
+            requirements_data_raw_cast: RequirementsData = {
+                "python_version": requirements_data_raw.get("python_version", "3.8"),
+                "apt_packages": requirements_data_raw.get("apt_packages", []),
+                "pip_packages": requirements_data_raw.get("pip_packages", {}),
+                "install_commands": requirements_data_raw.get("install_commands", ""),
+            }
+            time_traveled_requirements = time_travel_requirements(
+                requirements_data=requirements_data_raw_cast,
+                commit_date=git_data["commit_date"],
+                logger=test_retry_logger,
+            )
+            write_docker_files(
+                requirements_data=time_traveled_requirements,
+                git_data=git_data,
+                logger=test_retry_logger,
+            )
+            build_output = build_docker_images(
+                logger=test_retry_logger, build_name=f"test_retry_{num_test_retry}"
+            )
+            if build_output.returncode != 0:
+                raise ValueError(
+                    f"During test retry, Docker build failed with exit code {build_output.returncode}"
+                )
+
+            exit_code, logs = run_test_in_container(test_command, test_retry_logger)
+            num_test_retry += 1
+        except RequirementsError:
+            logger.error("Claude thinks the error cannot be solved by updating the requirements.")
 
     # # Get pip freeze requirements from the built Docker container
     # pip_freeze_requirements = get_pip_freeze_requirements(result=result, logger=logger)

@@ -1,21 +1,23 @@
 from pipeline.utils import make_file_contents_str
 
 
-def retry_installation(
+def retry_test(
     file_contents: dict[str, str],
     requirements_json: str,
     commit_hash: str,
     commit_date: str,
     error_message: str,
+    test_command: str,
 ):
     # load prompt from prompts/trial_and_error.txt
-    with open("src/prompts/trial_and_error.txt", "r") as f:
+    with open("src/prompts/test_trial_and_error.txt", "r") as f:
         prompt = f.read()
     prompt = prompt.replace("{file_contents_str}", make_file_contents_str(file_contents))
     prompt = prompt.replace("{requirements_json}", requirements_json)
     prompt = prompt.replace("{commit_hash}", commit_hash)
     prompt = prompt.replace("{commit_date}", commit_date)
     prompt = prompt.replace("{error_message}", error_message)
+    prompt = prompt.replace("{test_command}", test_command)
     print(prompt)
     return prompt
 

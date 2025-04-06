@@ -4,3 +4,4 @@ exps
 docker/*.sh
 build
 src/swe_bench_infinite.egg-info
+logs

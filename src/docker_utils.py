@@ -1,8 +1,10 @@
+import hashlib
 import logging
 import os
 import shutil
 import subprocess
 import time
+from typing import Optional, Tuple
 
 from data_types import GitRepoData, RequirementsData
 
@@ -12,8 +14,7 @@ import docker
 def write_docker_files(
     requirements_data: RequirementsData,
     git_data: GitRepoData,
-    logger: logging.Logger,
-    build_name: str,
+    logger,
 ) -> None:
     """
     Write Docker configuration files based on requirements data.
@@ -26,8 +27,7 @@ def write_docker_files(
     """
     # Create directories
     os.makedirs("docker", exist_ok=True)
-    log_subdir = os.path.join("logdir", build_name)
-    os.makedirs(log_subdir, exist_ok=True)
+    log_subdir = logger.get_logdir()
 
     # File paths in docker directory
     docker_files = [
@@ -38,39 +38,74 @@ def write_docker_files(
         "install_repo.sh",
     ]
 
-    # write to requirements.txt
-    with open("docker/conda_setup.sh", "w") as f:
+    # write to log_subdir first
+    log_paths = {}
+
+    # write conda_setup.sh to logdir
+    log_conda_path = os.path.join(log_subdir, "conda_setup.sh")
+    with open(log_conda_path, "w") as f:
         python_version = requirements_data["python_version"]
         f.write(f"mamba create -n testbed python={python_version}\n")
+    log_paths["conda_setup.sh"] = log_conda_path
 
-    # write to github_setup.sh
-    with open("docker/github_setup.sh", "w") as f:
+    # write github_setup.sh to logdir
+    log_github_path = os.path.join(log_subdir, "github_setup.sh")
+    with open(log_github_path, "w") as f:
         f.write(f"git clone {git_data['repo_url']} testbed\n")
         f.write("cd testbed\n")
         f.write(f"git checkout {git_data['commit_hash']}\n")
+    log_paths["github_setup.sh"] = log_github_path
 
-    with open("docker/apt_install.sh", "w") as f:
+    # write apt_install.sh to logdir
+    log_apt_path = os.path.join(log_subdir, "apt_install.sh")
+    with open(log_apt_path, "w") as f:
         f.write(
             f"apt-get update && apt-get install -y {' '.join(requirements_data['apt_packages'])}\n"
         )
+    log_paths["apt_install.sh"] = log_apt_path
 
-    with open("docker/pip_install.sh", "w") as f:
+    # write pip_install.sh to logdir
+    log_pip_path = os.path.join(log_subdir, "pip_install.sh")
+    with open(log_pip_path, "w") as f:
         f.write("#!/bin/bash\n")
         f.write("mamba activate testbed\n")
         for package, version in requirements_data["pip_packages"].items():
             f.write(f"pip install {package}=={version}\n")
+    log_paths["pip_install.sh"] = log_pip_path
 
-    # If install_commands is provided, write them to a file
-    with open("docker/install_repo.sh", "w") as f:
+    # write install_repo.sh to logdir
+    log_install_path = os.path.join(log_subdir, "install_repo.sh")
+    with open(log_install_path, "w") as f:
         f.write(requirements_data["install_commands"])
+    log_paths["install_repo.sh"] = log_install_path
 
-    # Copy all docker files to the log directory
+    # Copy from logdir to docker folder only if content changed
+    # NOTE: this is because Docker also checks the timestamp of the file
+    # so if the content hasn't changed, we don't update these files to retrigger build
     for filename in docker_files:
-        src_path = os.path.join("docker", filename)
-        dst_path = os.path.join(log_subdir, filename)
-        shutil.copy2(src_path, dst_path)
+        log_path = log_paths[filename]
+        docker_path = os.path.join("docker", filename)
 
-    logger.info(f"Docker configuration files written successfully and copied to {log_subdir}")
+        # Compute hash of the new file in logdir
+        with open(log_path, "rb") as f:
+            new_content_hash = hashlib.md5(f.read()).hexdigest()
+
+        # Check if docker file exists and compute its hash
+        copy_needed = True
+        if os.path.exists(docker_path):
+            with open(docker_path, "rb") as f:
+                existing_content_hash = hashlib.md5(f.read()).hexdigest()
+            if existing_content_hash == new_content_hash:
+                copy_needed = False
+
+        # Copy only if content has changed
+        if copy_needed:
+            shutil.copy2(log_path, docker_path)
+            logger.info(f"Updated {filename} in docker folder with new content")
+        else:
+            logger.info(f"Skipped copying {filename} to docker folder (content unchanged)")
+
+    logger.info(f"Docker configuration files written successfully to {log_subdir}")
 
 
 def build_docker_images(logger: logging.Logger, build_name: str):
@@ -141,3 +176,41 @@ def build_docker_images(logger: logging.Logger, build_name: str):
     except Exception as e:
         logger.error(f"Unexpected error building testbed docker image: {e}")
         return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
+
+
+def run_test_in_container(
+    test_command: str, logger: Optional[logging.Logger] = None
+) -> Tuple[int, str]:
+    """
+    Run a test command in a Docker container.
+
+    Args:
+        test_command (str): The test command to run in the container
+        logger (logging.Logger, optional): Logger for tracking operations
+
+    Returns:
+        Tuple[int, str]: A tuple of (exit_code, logs)
+    """
+    if logger:
+        logger.info(f"Running test command in Docker container: {test_command}")
+
+    # Create and start container
+    container = docker.from_env().containers.run(
+        "testbed:latest",
+        command="tail -f /dev/null",  # Keep container running
+        remove=True,  # Auto-remove when stopped
+        detach=True,  # Run in background
+    )
+
+    # Execute command in the running container
+    result = container.exec_run(f"conda run -n testbed {test_command}")
+    exit_code = result.exit_code
+    logs = result.output.decode("utf-8")
+
+    if logger:
+        logger.info(f"Command exited with code {exit_code}")
+        logger.info(logs)
+
+    container.stop()
+
+    return exit_code, logs

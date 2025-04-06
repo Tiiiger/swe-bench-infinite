@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 from typing import Any, Dict
@@ -10,9 +9,7 @@ from exceptions import AnthropicResponseError, RequirementsError
 from exp_utils import dump_anthropic_response
 
 
-def anthropic_generate_json(
-    prompt: str, logger=None, output_filename="output.json"
-) -> Dict[str, Any]:
+def anthropic_generate_json(prompt: str, logger, output_filename="output.json") -> Dict[str, Any]:
     """
     Abstract function to handle Anthropic API calls, JSON extraction, and response logging.
 
@@ -29,15 +26,6 @@ def anthropic_generate_json(
         AnthropicResponseError: If there's an issue with the Anthropic API response
         RequirementsError: If there's an issue parsing the JSON in the response
     """
-    # Create a default logger if none is provided
-    if logger is None:
-        logger = logging.getLogger("anthropic_generate_json")
-        logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
     client = AnthropicClient()
 
     logger.info("Sending prompt to Anthropic API...")

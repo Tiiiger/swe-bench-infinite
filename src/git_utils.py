@@ -9,7 +9,7 @@ from data_types import GitRepoData
 from exceptions import GitError
 from github import Github
 
-from logger import setup_child_logger
+from logger import setup_logger
 
 
 def get_repo_url(repo_name: str) -> str:
@@ -98,11 +98,10 @@ def clone_and_get_tree(
     and return the directory tree.
 
     Args:
-        repo_url (str): URL of the git repository to clone
-        target_dir (str): Directory name for the cloned repository
+        repo_name (str): Name of the git repository to clone
         commit (str): The commit hash to checkout
-        tree_depth (int): Depth level for the tree command
         logger (logging.Logger): Logger for tracking operations
+        tree_depth (int): Depth level for the tree command
 
     Returns:
         GitRepoData: A dictionary containing the tree output and the commit information
@@ -111,7 +110,7 @@ def clone_and_get_tree(
         GitError: If any git operation fails
     """
     # Extract timestamp from parent logger
-    clone_logger = setup_child_logger(logger_name="clone_and_get_tree", parent_logger=logger)
+    clone_logger = setup_logger(logger_name="clone_and_get_tree", parent_logger=logger)
 
     # save current working directory
     current_dir = os.getcwd()
