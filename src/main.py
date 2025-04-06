@@ -15,16 +15,13 @@ from pipeline.build_retry import retry_installation
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
 from pipeline.test_retry import retry_test
-from version_finder import check_and_replace_version, get_version_at_time
+from version_finder import get_version_at_time
 
-import docker  # type: ignore
-from logger import setup_logger
+from logger import CustomLogger, setup_logger
 from model_utils import anthropic_generate_json
 
 
-def process_localization(
-    result: GitRepoData, logger: Optional[logging.Logger] = None
-) -> Dict[str, str]:
+def process_localization(result: GitRepoData, logger: CustomLogger) -> Dict[str, str]:
     """
     Process the localization of requirements for a given commit.
 
@@ -64,7 +61,7 @@ def process_localization(
 
 
 def time_travel_requirements(
-    requirements_data: RequirementsData, commit_date: str, logger: Optional[logging.Logger] = None
+    requirements_data: RequirementsData, commit_date: str, logger: CustomLogger
 ) -> RequirementsData:
     """
     Update package versions in requirements data based on the commit date.
@@ -217,45 +214,6 @@ def process_trial_and_error(
     return casted_requirements_data
 
 
-def get_pip_freeze_requirements(
-    result: GitRepoData, logger: Optional[logging.Logger] = None
-) -> Dict[str, str]:
-    """
-    Run pip freeze in Docker container and process the requirements.
-
-    Args:
-        result (GitRepoData): Dictionary containing commit date and other info
-        logger (logging.Logger, optional): Logger for tracking operations
-
-    Returns:
-        Dict[str, str]: Dictionary mapping package names to versions
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
-    logger.info("Running pip freeze in Docker container")
-    # Create and start a container from the testbed image
-    container = docker.from_env().containers.run(
-        "testbed:latest", command="pip freeze", remove=True, detach=False
-    )
-    # container output is in bytes, convert to string
-    output_str = container.decode("utf-8")
-    logger.info(output_str)
-
-    # process the requirements being spit out by pip freeze
-    pip_freeze_requirements: Dict[str, str] = {}
-    for line in output_str.split("\n"):
-        if "==" not in line:
-            continue
-        package, version = line.split("==")
-        pip_freeze_requirements[package] = check_and_replace_version(
-            package, version, result["commit_date"]
-        )
-
-    logger.info(f"Processed {len(pip_freeze_requirements)} packages from pip freeze")
-    return pip_freeze_requirements
-
-
 # Main execution
 if __name__ == "__main__":
     # Parse command line arguments
@@ -338,18 +296,14 @@ if __name__ == "__main__":
     time_traveled_requirements = time_travel_requirements(
         requirements_data=requirements_data, commit_date=git_data["commit_date"], logger=logger
     )
-    # NOTE: I am debugging trial and error for running the test and this logic is very temporary for hacking
-    # a specific version that doesn't involve trial and error
-    # if trial and error has been run, this caching logic wouldn't be valid
-    if not args.debug:
-        build_logger = setup_logger(
-            logger_name="first_build", parent_logger=logger, subfolder="first_build"
-        )
-        write_docker_files(
-            requirements_data=time_traveled_requirements,
-            git_data=git_data,
-            logger=build_logger,
-        )
+    build_logger = setup_logger(
+        logger_name="first_build", parent_logger=logger, subfolder="first_build"
+    )
+    write_docker_files(
+        requirements_data=time_traveled_requirements,
+        git_data=git_data,
+        logger=build_logger,
+    )
 
     # Build Docker images
     build_output = build_docker_images(logger=logger, build_name="first_build")
@@ -440,28 +394,3 @@ if __name__ == "__main__":
             num_test_retry += 1
         except RequirementsError:
             logger.error("Claude thinks the error cannot be solved by updating the requirements.")
-
-    # # Get pip freeze requirements from the built Docker container
-    # pip_freeze_requirements = get_pip_freeze_requirements(result=result, logger=logger)
-
-    # # Update the requirements data
-    # time_traveled_requirements["pip_packages"] = pip_freeze_requirements
-
-    # # Write the docker files again
-    # write_docker_files(
-    #     requirements_data=time_traveled_requirements,
-    #     result=result,
-    #     repo_url=REPO_URL,
-    #     logger=logger,
-    # )
-
-    # # Build the docker image again
-    # logger.info("Building docker image (testbed) with time traveled pip freeze requirements")
-    # output = build_docker_images(logger=logger)
-    # if output.returncode != 0:
-    #     logger.error(f"Docker build failed with exit code {output.returncode}")
-    #     logger.error(f"Error output: {output.stderr}")
-    #     exit(1)
-    # else:
-    #     logger.info(output.stdout)
-    #     logger.info("Docker image built successfully")

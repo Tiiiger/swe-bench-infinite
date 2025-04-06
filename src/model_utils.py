@@ -7,9 +7,12 @@ from anthropic_client import AnthropicClient
 from exceptions import AnthropicResponseError, RequirementsError
 
 from exp_utils import dump_anthropic_response
+from logger import CustomLogger
 
 
-def anthropic_generate_json(prompt: str, logger, output_filename="output.json") -> Dict[str, Any]:
+def anthropic_generate_json(
+    prompt: str, logger: CustomLogger, output_filename="output.json"
+) -> Dict[str, Any]:
     """
     Abstract function to handle Anthropic API calls, JSON extraction, and response logging.
 
@@ -40,15 +43,13 @@ def anthropic_generate_json(prompt: str, logger, output_filename="output.json") 
 
     # Dump response for logging
     response_dump = dump_anthropic_response(response, logger)
+    # Save response to log file
+    with open(logger.get_logdir() + "/anthropic_response.json", "w") as f:
+        f.write(response_dump)
+
     if text_block is None:
         logger.error("Expected text content block, got %s", content_block.type)
         raise AnthropicResponseError("Expected text content block, got different content type")
-
-    # Save response to log file
-    if logger and hasattr(logger, "handlers") and len(logger.handlers) > 1:
-        log_file = logger.handlers[1].baseFilename
-        with open(log_file, "w") as f:
-            f.write(response_dump)
 
     # Extract JSON block using regex
     logger.info("Extracting JSON block from response...")
@@ -69,11 +70,9 @@ def anthropic_generate_json(prompt: str, logger, output_filename="output.json") 
         raise RequirementsError(f"Error parsing JSON block: {e}") from e
 
     # Save to output file if a logger with handlers is provided
-    if logger and hasattr(logger, "handlers") and len(logger.handlers) > 1:
-        exp_dir = os.path.dirname(logger.handlers[1].baseFilename)
-        output_path = os.path.join(exp_dir, output_filename)
-        logger.info(f"Saving JSON results to {output_path}")
-        with open(output_path, "w") as f:
-            json.dump(parsed_data, f, indent=4)
+    output_path = os.path.join(logger.get_logdir(), output_filename)
+    logger.info(f"Saving JSON results to {output_path}")
+    with open(output_path, "w") as f:
+        json.dump(parsed_data, f, indent=4)
 
     return parsed_data
