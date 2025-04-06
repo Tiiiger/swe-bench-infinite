@@ -3,14 +3,12 @@ import json
 import logging
 import os
 import pathlib
-import subprocess
-import time
 from typing import Dict, Optional
 
 import datasets
 from anthropic_client import AnthropicClient
 from data_types import GitRepoData, RequirementsData
-from docker_utils import write_docker_files
+from docker_utils import build_docker_images, write_docker_files
 from git_utils import clone_and_get_tree, load_file_contents
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
@@ -217,76 +215,6 @@ def process_trial_and_error(
     return casted_requirements_data
 
 
-def build_docker_images(logger: logging.Logger):
-    """
-    Build Docker images for the testbed environment using the Docker Python API.
-
-    Args:
-        logger (logging.Logger): Logger for tracking operations
-
-    Returns:
-        bool: True if Docker build was successful, False otherwise
-    """
-    # Initialize Docker client
-    client = docker.from_env()  # type: ignore[attr-defined]
-
-    # Build base image
-    logger.info("Building docker image (base)")
-    start_time = time.time()
-    try:
-        base_image, base_logs = client.images.build(
-            path="./docker",
-            dockerfile="Dockerfile.base",
-            tag="testbed-base:latest",
-        )
-        base_build_time = time.time() - start_time
-        logger.info(f"Base docker image build completed in {base_build_time:.2f} seconds")
-        logger.debug(f"Base image ID: {base_image.id}")
-    except docker.errors.BuildError as e:  # type: ignore[attr-defined]
-        logger.error(f"Error building base docker image: {e}")
-        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
-    except Exception as e:
-        logger.error(f"Unexpected error building base docker image: {e}")
-        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
-
-    # Build testbed image
-    logger.info("Building docker image (testbed)")
-    start_time = time.time()
-    testbed_logs: list[dict] = []  # Initialize testbed_logs to prevent UnboundLocalError
-    try:
-        testbed_image, logs = client.images.build(
-            path="./docker",
-            dockerfile="Dockerfile",
-            tag="testbed:latest",
-        )
-        for log in logs:
-            testbed_logs.append(log)  # type: ignore[arg-type]
-        testbed_build_time = time.time() - start_time
-        logger.info(f"Testbed docker image build completed in {testbed_build_time:.2f} seconds")
-        logger.debug(f"Testbed image ID: {testbed_image.id}")
-
-        # Save stdout to log directory if build successful
-        build_log = f"Build successful\nBase build time: {base_build_time:.2f} seconds\nTestbed build time: {testbed_build_time:.2f} seconds\nBase image ID: {base_image.id}\nTestbed image ID: {testbed_image.id}"
-
-        # Return success
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=build_log, stderr="")
-    except docker.errors.BuildError as e:  # type: ignore[attr-defined]
-        logger.error(f"Error building testbed docker image: {e}")
-        error_message = "\n".join(
-            [
-                log.get("stream", "")
-                for log in testbed_logs
-                if "error" in log.get("stream", "").lower()
-            ]
-        )
-        return subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr=error_message or str(e)
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error building testbed docker image: {e}")
-        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
-
-
 def get_pip_freeze_requirements(
     result: GitRepoData, logger: Optional[logging.Logger] = None
 ) -> Dict[str, str]:
@@ -412,16 +340,19 @@ if __name__ == "__main__":
         requirements_data=time_traveled_requirements,
         git_data=git_data,
         logger=logger,
+        build_name="first_build",
     )
 
     # Build Docker images
-    output = build_docker_images(logger=logger)
+    build_output = build_docker_images(logger=logger, build_name="first_build")
 
     # Check if Docker build was successful
-    if output.returncode != 0:
-        logger.error(f"Docker build failed with exit code {output.returncode}")
-        logger.error(f"Error output: {output.stderr}")
-        error_message = output.stderr
+    num_trial = 0
+    while build_output.returncode != 0 and num_trial < 3:
+        logger.error(f"Docker build failed with exit code {build_output.returncode}")
+        logger.error(f"Error output: {build_output.stderr}")
+        logger.info(f"Trial {num_trial} failed")
+        error_message = build_output.stderr
         time_traveled_requirements = process_trial_and_error(
             file_contents=file_contents,
             requirements_data=time_traveled_requirements,
@@ -433,18 +364,12 @@ if __name__ == "__main__":
             requirements_data=time_traveled_requirements,
             git_data=git_data,
             logger=logger,
+            build_name=f"trial_and_error_{num_trial}",
         )
-        output = build_docker_images(logger=logger)
-        if output.returncode != 0:
-            logger.error(
-                f"After trial and error, Docker build failed with exit code {output.returncode}"
-            )
-            logger.error(f"Error output: {output.stderr}")
-            logger.error("Failed to build Docker images")
-            exit(1)
-        else:
+        build_output = build_docker_images(logger=logger, build_name=f"trial_and_error_{num_trial}")
+        num_trial += 1
+        if build_output.returncode == 0:
             logger.info("After trial and error, Docker build completed successfully")
-            logger.info(output.stdout)
 
     # # Get pip freeze requirements from the built Docker container
     # pip_freeze_requirements = get_pip_freeze_requirements(result=result, logger=logger)
