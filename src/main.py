@@ -336,12 +336,16 @@ if __name__ == "__main__":
     time_traveled_requirements = time_travel_requirements(
         requirements_data=requirements_data, commit_date=git_data["commit_date"], logger=logger
     )
-    write_docker_files(
-        requirements_data=time_traveled_requirements,
-        git_data=git_data,
-        logger=logger,
-        build_name="first_build",
-    )
+    # NOTE: I am debugging trial and error for running the test and this logic is very temporary for hacking
+    # a specific version that doesn't involve trial and error
+    # if trial and error has been run, this caching logic wouldn't be valid
+    if not args.debug:
+        write_docker_files(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=logger,
+            build_name="first_build",
+        )
 
     # Build Docker images
     build_output = build_docker_images(logger=logger, build_name="first_build")
