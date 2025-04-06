@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import pathlib
-from typing import Dict, Optional
+from typing import Dict
 
 import datasets
 from anthropic_client import AnthropicClient
@@ -15,7 +15,7 @@ from pipeline.build_retry import retry_installation
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
 from pipeline.test_retry import retry_test
-from version_finder import get_version_at_time
+from version_finder import time_travel_requirements
 
 from logger import CustomLogger, setup_logger
 from model_utils import anthropic_generate_json
@@ -60,58 +60,10 @@ def process_localization(result: GitRepoData, logger: CustomLogger) -> Dict[str,
     return file_paths
 
 
-def time_travel_requirements(
-    requirements_data: RequirementsData, commit_date: str, logger: CustomLogger
-) -> RequirementsData:
-    """
-    Update package versions in requirements data based on the commit date.
-
-    Args:
-        requirements_data (RequirementsData): Dictionary containing the requirements data
-        commit_date (str): The date of the commit in YYYY-MM-DD format
-        logger (logging.Logger, optional): Logger for tracking operations
-
-    Returns:
-        RequirementsData: Updated requirements data with appropriate versions
-    """
-    if logger:
-        logger.info(f"Time traveling requirements to {commit_date}")
-
-    pip_packages: Dict[str, str] = {}
-    updated_requirements: RequirementsData = {
-        # TODO: this should also use time travel
-        "python_version": requirements_data.get("python_version", "3.8"),
-        # TODO: we should have some automatic validation of the apt packages
-        "apt_packages": requirements_data.get("apt_packages", []),
-        "pip_packages": pip_packages,
-        "install_commands": requirements_data.get("install_commands", ""),
-    }
-
-    # Update pip package versions based on commit date
-    for package, version in requirements_data.get("pip_packages", {}).items():
-        if version.startswith("=="):
-            # Use specific version as is (remove == prefix)
-            updated_version = version[2:]
-        elif version.startswith(">=") or version == "":
-            # Find the appropriate version at the commit date
-            updated_version = get_version_at_time(package_name=package, timestamp=commit_date)
-            if logger:
-                logger.info(
-                    f"Updated {package} version to {updated_version} for date {commit_date}"
-                )
-        else:
-            # Keep the version as is
-            updated_version = version
-
-        pip_packages[package] = updated_version
-
-    return updated_requirements
-
-
 def process_requirements_collection(
     file_contents: Dict[str, str],
     result: GitRepoData,
-    logger: Optional[logging.Logger] = None,
+    logger: CustomLogger,
 ) -> RequirementsData:
     """
     Process the collection of requirements and build the Docker environment.

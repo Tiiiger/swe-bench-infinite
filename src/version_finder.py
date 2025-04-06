@@ -8,6 +8,7 @@ from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
+from data_types import RequirementsData
 
 # Import Selenium components
 from selenium import webdriver
@@ -15,6 +16,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+
+from logger import CustomLogger
 
 
 def get_versions_with_requests(package_name):
@@ -177,6 +180,54 @@ def get_version_at_time(package_name, timestamp):
         raise ValueError(f"No version found for {package_name} at {timestamp}")
 
     return prev_version
+
+
+def time_travel_requirements(
+    requirements_data: RequirementsData, commit_date: str, logger: CustomLogger
+) -> RequirementsData:
+    """
+    Update package versions in requirements data based on the commit date.
+
+    Args:
+        requirements_data (RequirementsData): Dictionary containing the requirements data
+        commit_date (str): The date of the commit in YYYY-MM-DD format
+        logger (logging.Logger, optional): Logger for tracking operations
+
+    Returns:
+        RequirementsData: Updated requirements data with appropriate versions
+    """
+    if logger:
+        logger.info(f"Time traveling requirements to {commit_date}")
+
+    pip_packages: dict[str, str] = {}
+    updated_requirements: RequirementsData = {
+        # TODO: this should also use time travel
+        "python_version": requirements_data.get("python_version", "3.8"),
+        # TODO: we should have some automatic validation of the apt packages
+        "apt_packages": requirements_data.get("apt_packages", []),
+        "pip_packages": pip_packages,
+        "install_commands": requirements_data.get("install_commands", ""),
+    }
+
+    # Update pip package versions based on commit date
+    for package, version in requirements_data.get("pip_packages", {}).items():
+        if version.startswith("=="):
+            # Use specific version as is (remove == prefix)
+            updated_version = version[2:]
+        elif version.startswith(">=") or version == "":
+            # Find the appropriate version at the commit date
+            updated_version = get_version_at_time(package_name=package, timestamp=commit_date)
+            if logger:
+                logger.info(
+                    f"Updated {package} version to {updated_version} for date {commit_date}"
+                )
+        else:
+            # Keep the version as is
+            updated_version = version
+
+        pip_packages[package] = updated_version
+
+    return updated_requirements
 
 
 class TestVersionFinder(unittest.TestCase):
