@@ -9,29 +9,36 @@ class CustomLogger(logging.Logger):
     def __init__(self, name, level=logging.NOTSET):
         super().__init__(name, level)
         self.log_dir = None
+        self._debug = False
 
     def get_logdir(self):
         """Get the log directory used by this logger."""
         return self.log_dir
+
+    def is_debug(self):
+        """Get whether this logger is in debug mode."""
+        return self._debug
 
     def setup(self, parent_logger=None, subfolder="", debug=False):
         """
         Set up the logger with console and file handlers.
 
         Args:
-            parent_logger (logging.Logger, optional): Parent logger to inherit timestamp from
+            parent_logger (logging.Logger, optional): Parent logger to inherit timestamp and debug flag from
             subfolder (str, optional): Subfolder to create within the timestamp directory
-            debug (bool, optional): Whether to add a debug tag to the log directory
+            debug (bool, optional): Whether to add a debug tag to the log directory. If parent_logger is provided,
+                                  this value will be overridden by the parent's debug status.
 
         Returns:
             CustomLogger: Self, for method chaining
         """
-        # Determine timestamp from parent logger or create new one
+        # Determine timestamp and debug status from parent logger or create new ones
         if parent_logger and hasattr(parent_logger, "handlers") and len(parent_logger.handlers) > 1:
             timestamp = parent_logger.handlers[1].baseFilename.split("/")[-2]
             # Remove debug suffix if present
             if timestamp.endswith("_debug"):
                 timestamp = timestamp[:-6]
+                self._debug = True  # Inherit debug status from parent
         else:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 

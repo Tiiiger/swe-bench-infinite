@@ -4,11 +4,12 @@ import os
 import shutil
 import subprocess
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 from data_types import GitRepoData, RequirementsData
 
 import docker
+from logger import setup_logger
 
 
 def write_docker_files(
@@ -45,7 +46,8 @@ def write_docker_files(
     log_conda_path = os.path.join(log_subdir, "conda_setup.sh")
     with open(log_conda_path, "w") as f:
         python_version = requirements_data["python_version"]
-        f.write(f"mamba create -n testbed python={python_version}\n")
+        version_str = "".join(python_version.split(".")).replace(".", "")
+        f.write(f"conda rename -n py{version_str} testbed\n")
     log_paths["conda_setup.sh"] = log_conda_path
 
     # write github_setup.sh to logdir
@@ -117,17 +119,15 @@ def custom_build_docker_images(path: str, dockerfile: str, tag: str):
     """
     import re
 
-    from json_stream_utils import json_stream
-
     client = docker.from_env()  # type: ignore[attr-defined]
     # copy from docker.models.images.ImageCollection.build
-    resp = client.api.build(path=path, dockerfile=dockerfile, tag=tag)
+    resp = client.api.build(path=path, dockerfile=dockerfile, tag=tag, decode=True)
     if isinstance(resp, str):
         return (client.images.get(resp), [])
     image_id = None
     full_log = ""
     has_error = False
-    for chunk in json_stream(resp):
+    for chunk in resp:
         if "error" in chunk:
             full_log += "[ERROR] " + chunk["error"].strip() + "\n"
             has_error = True
@@ -143,7 +143,7 @@ def custom_build_docker_images(path: str, dockerfile: str, tag: str):
         elif "progressDetail" in chunk:
             full_log += "[PROGRESS DETAIL] " + chunk["progressDetail"].strip() + "\n"
         elif "aux" in chunk:
-            full_log += "[AUX] " + chunk["aux"].strip() + "\n"
+            full_log += "[AUX] " + str(chunk["aux"]) + "\n"
         else:
             full_log += "[UNKNOWN] " + str(chunk).strip() + "\n"
     if image_id and not has_error:
@@ -152,7 +152,12 @@ def custom_build_docker_images(path: str, dockerfile: str, tag: str):
         return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=full_log)
 
 
-def build_docker_images(logger: logging.Logger, build_name: str):
+def build_docker_images(
+    requirements_data: RequirementsData,
+    git_data: GitRepoData,
+    logger: logging.Logger,
+    build_name: str,
+):
     """
     Build Docker images for the testbed environment using the Docker Python API.
 
@@ -165,25 +170,34 @@ def build_docker_images(logger: logging.Logger, build_name: str):
     # Initialize Docker client
     docker.from_env()  # type: ignore[attr-defined]
 
+    # add a child logger for docker build logs
+    docker_build_logger = setup_logger(
+        f"docker_{build_name}", parent_logger=logger, subfolder=f"docker_{build_name}"
+    )
+
+    # write docker files
+    write_docker_files(requirements_data, git_data, docker_build_logger)
+
     # Build base image
-    logger.info("Building docker image (base)")
+    docker_build_logger.info("Building docker image (base)")
     start_time = time.time()
     base_result = custom_build_docker_images(
         path="./docker",
         dockerfile="Dockerfile.base",
-        tag="testbed-base-1:latest",
+        tag="testbed-base:latest",
     )
     if base_result.returncode != 0:
-        logger.error("Failed to retrieve or build base docker image")
-        logger.error(base_result.stderr)
+        docker_build_logger.error("Failed to retrieve or build base docker image")
+        docker_build_logger.error(base_result.stderr)
         raise RuntimeError("Failed to retrieve or build base docker image")
+    else:
+        docker_build_logger.info(base_result.stdout)
 
     base_build_time = time.time() - start_time
-    logger.info(f"Base docker image build completed in {base_build_time:.2f} seconds")
-    logger.debug(f"Base image ID: {base_result.stdout}")
+    docker_build_logger.info(f"Base docker image build completed in {base_build_time:.2f} seconds")
 
     # Build testbed image
-    logger.info("Building docker image (testbed)")
+    docker_build_logger.info("Building docker image (testbed)")
     start_time = time.time()
     testbed_result = custom_build_docker_images(
         path="./docker",
@@ -191,13 +205,17 @@ def build_docker_images(logger: logging.Logger, build_name: str):
         tag="testbed:latest",
     )
     testbed_build_time = time.time() - start_time
-    logger.info(f"Testbed docker image build completed in {testbed_build_time:.2f} seconds")
+    docker_build_logger.info(
+        f"Testbed docker image build completed in {testbed_build_time:.2f} seconds"
+    )
     if testbed_result.returncode != 0:
-        logger.error("Failed to retrieve or build testbed docker image")
-        logger.error(testbed_result.stderr)
+        docker_build_logger.error("Failed to retrieve or build testbed docker image")
+        docker_build_logger.error(testbed_result.stderr)
         return subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr=testbed_result.stderr
         )
+    else:
+        docker_build_logger.info(testbed_result.stdout)
 
     # Save stdout to log directory if build successful
     build_log = f"Build successful\nBase build time: {base_build_time:.2f} seconds\nTestbed build time: {testbed_build_time:.2f} seconds"
@@ -208,7 +226,7 @@ def build_docker_images(logger: logging.Logger, build_name: str):
 
 def run_test_in_container(
     test_command: str, logger: Optional[logging.Logger] = None
-) -> Tuple[int, str]:
+) -> subprocess.CompletedProcess:
     """
     Run a test command in a Docker container.
 
@@ -217,7 +235,7 @@ def run_test_in_container(
         logger (logging.Logger, optional): Logger for tracking operations
 
     Returns:
-        Tuple[int, str]: A tuple of (exit_code, logs)
+        subprocess.CompletedProcess: The result of running the test command
     """
     if logger:
         logger.info(f"Running test command in Docker container: {test_command}")
@@ -241,4 +259,6 @@ def run_test_in_container(
 
     container.stop()
 
-    return exit_code, logs
+    return subprocess.CompletedProcess(
+        args=[test_command], returncode=exit_code, stdout=logs, stderr=""
+    )

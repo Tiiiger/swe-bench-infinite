@@ -36,6 +36,7 @@ However, if the files only mention python >= 3.6, you should choose 3.6 and not 
    - No version: if the files do not mention a specific or relative version, leave the value empty.
 4. After getting your results, we (the developers) will run apt, conda, and pip commands to install the environment you specified.
 Assume that the dependencies you specified are installed correctly, what bash commands do we need to run to install the development environment?
+We will later apply edits to the repo and want to test the edits. So you need to install the development environment in editable mode so that we can test the edits.
 For example, "pip install -e ."  is a usual command to install the development environment. However, you may need to add more flags to the command, specify install options, add environment variables, etc.
 
 Now, begin your work!

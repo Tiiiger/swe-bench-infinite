@@ -1,8 +1,8 @@
 import argparse
 import json
-import logging
 import os
 import pathlib
+import subprocess
 from typing import Dict
 
 import datasets
@@ -110,32 +110,33 @@ def process_requirements_collection(
     return requirements_data
 
 
-def process_trial_and_error(
+def process_retry_build(
     file_contents: Dict[str, str],
     requirements_data: RequirementsData,
     git_data: GitRepoData,
     error_message: str,
-    logger: logging.Logger,
-) -> RequirementsData:
+    trial_num: int,
+    parent_logger: CustomLogger,
+) -> tuple[RequirementsData, subprocess.CompletedProcess]:
     """
-    Process the trial and error of the Docker environment.
+    Process the retry of a failed build by attempting to fix requirements and rebuild.
 
     Args:
         file_contents (dict): Dictionary mapping file paths to their contents
-        requirements_json: The requirements data that failed
-        result (GitRepoData): Dictionary containing commit_hash and commit_date
-        error_message (str): The error message from the failed Docker build
-        client (AnthropicClient): Client for making requests to Anthropic API
-        logger (logging.Logger, optional): Parent logger for tracking operations
-    """
-    # Create specific logger for this function
-    print("trial_and_error parent logger: ", logger)
-    trial_logger = setup_logger(
-        logger_name="trial_and_error", parent_logger=logger, subfolder="trial_and_error"
-    )
+        requirements_data (RequirementsData): Current requirements data
+        git_data (GitRepoData): Dictionary containing commit_hash and commit_date
+        error_message (str): The error message from the failed build
+        trial_num (int): The current trial number
+        parent_logger (CustomLogger): Parent logger for tracking operations
 
-    trial_logger.info("Starting trial and error process for failed Docker build")
-    trial_logger.info(f"Error message: {error_message}")
+    Returns:
+        tuple[RequirementsData, subprocess.CompletedProcess]: Updated requirements data and build output
+    """
+    build_retry_logger = setup_logger(
+        logger_name=f"retry_build_{trial_num}",
+        parent_logger=parent_logger,
+        subfolder=f"retry_build_{trial_num}",
+    )
 
     prompt = retry_installation(
         file_contents=file_contents,
@@ -144,26 +145,125 @@ def process_trial_and_error(
         commit_date=git_data["commit_date"],
         error_message=error_message,
     )
-    trial_logger.info(prompt)
 
-    # Use the abstracted function to generate JSON from Anthropic API
-    requirements_data_raw = anthropic_generate_json(
-        prompt=prompt,
-        logger=trial_logger,
-        output_filename="trial_and_error_output.json",
+    try:
+        requirements_data_raw = anthropic_generate_json(
+            prompt=prompt,
+            logger=build_retry_logger,
+            output_filename="retry_build_output.json",
+        )
+        # NOTE: I hate python typing ... this is so immature
+        requirements_data_raw_cast: RequirementsData = {
+            "python_version": requirements_data_raw.get("python_version", "3.8"),
+            "apt_packages": requirements_data_raw.get("apt_packages", []),
+            "pip_packages": requirements_data_raw.get("pip_packages", {}),
+            "install_commands": requirements_data_raw.get("install_commands", ""),
+        }
+        time_traveled_requirements = time_travel_requirements(
+            requirements_data=requirements_data_raw_cast,
+            commit_date=git_data["commit_date"],
+            logger=build_retry_logger,
+        )
+        write_docker_files(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=build_retry_logger,
+        )
+        build_output = build_docker_images(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=build_retry_logger,
+            build_name=f"retry_build_{trial_num}",
+        )
+
+        return time_traveled_requirements, build_output
+    except RequirementsError:
+        parent_logger.error(
+            "Claude thinks the error cannot be solved by updating the requirements."
+        )
+        raise
+
+
+def process_retry_test(
+    file_contents: Dict[str, str],
+    requirements_data: RequirementsData,
+    git_data: GitRepoData,
+    error_message: str,
+    test_command: str,
+    trial_num: int,
+    parent_logger: CustomLogger,
+) -> tuple[RequirementsData, subprocess.CompletedProcess]:
+    """
+    Process the retry of a failed test by attempting to fix requirements and rebuild.
+
+    Args:
+        file_contents (dict): Dictionary mapping file paths to their contents
+        requirements_data (RequirementsData): Current requirements data
+        git_data (GitRepoData): Dictionary containing commit_hash and commit_date
+        error_message (str): The error message from the failed test
+        test_command (str): The test command to run
+        trial_num (int): The current trial number
+        parent_logger (CustomLogger): Parent logger for tracking operations
+
+    Returns:
+        tuple[RequirementsData, subprocess.CompletedProcess]: Updated requirements data and test output
+    """
+    test_retry_logger = setup_logger(
+        logger_name=f"retry_test_{trial_num}",
+        parent_logger=parent_logger,
+        subfolder=f"retry_test_{trial_num}",
     )
 
-    # Ensure required fields are present
-    casted_requirements_data: RequirementsData = {
-        "python_version": requirements_data_raw.get("python_version", "3.8"),
-        "apt_packages": requirements_data_raw.get("apt_packages", []),
-        "pip_packages": requirements_data_raw.get("pip_packages", {}),
-        "install_commands": requirements_data_raw.get("install_commands", ""),
-    }
+    prompt = retry_test(
+        file_contents=file_contents,
+        requirements_json=json.dumps(requirements_data, indent=2),
+        commit_hash=git_data["commit_hash"],
+        commit_date=git_data["commit_date"],
+        error_message=error_message,
+        test_command=test_command,
+    )
 
-    trial_logger.info(f"Parsed requirements data: {casted_requirements_data}")
+    try:
+        requirements_data_raw = anthropic_generate_json(
+            prompt=prompt,
+            logger=test_retry_logger,
+            output_filename="retry_test_output.json",
+        )
+        # NOTE: I hate python typing ... this is so immature
+        requirements_data_raw_cast: RequirementsData = {
+            "python_version": requirements_data_raw.get("python_version", "3.8"),
+            "apt_packages": requirements_data_raw.get("apt_packages", []),
+            "pip_packages": requirements_data_raw.get("pip_packages", {}),
+            "install_commands": requirements_data_raw.get("install_commands", ""),
+        }
+        time_traveled_requirements = time_travel_requirements(
+            requirements_data=requirements_data_raw_cast,
+            commit_date=git_data["commit_date"],
+            logger=test_retry_logger,
+        )
+        write_docker_files(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=test_retry_logger,
+        )
+        build_output = build_docker_images(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=test_retry_logger,
+            build_name=f"retry_test_{trial_num}",
+        )
+        if build_output.returncode != 0:
+            raise ValueError(
+                f"During test retry, Docker build failed with exit code {build_output.returncode}"
+            )
 
-    return casted_requirements_data
+        test_output = run_test_in_container(test_command, test_retry_logger)
+        return time_traveled_requirements, test_output
+    except RequirementsError:
+        parent_logger.error(
+            "Claude thinks the error cannot be solved by updating the requirements."
+        )
+        raise
 
 
 # Main execution
@@ -248,102 +348,60 @@ if __name__ == "__main__":
     time_traveled_requirements = time_travel_requirements(
         requirements_data=requirements_data, commit_date=git_data["commit_date"], logger=logger
     )
-    build_logger = setup_logger(
-        logger_name="first_build", parent_logger=logger, subfolder="first_build"
-    )
-    write_docker_files(
+    # Build Docker images
+    build_output = build_docker_images(
         requirements_data=time_traveled_requirements,
         git_data=git_data,
-        logger=build_logger,
+        logger=logger,
+        build_name="first_build",
     )
-
-    # Build Docker images
-    build_output = build_docker_images(logger=logger, build_name="first_build")
-    print("build_output: ", build_output)
 
     # Check if Docker build was successful
     num_trial = 0
     while build_output.returncode != 0 and num_trial < 3:
-        trial_logger = setup_logger(
-            logger_name=f"trial_and_error_{num_trial}",
-            parent_logger=logger,
-            subfolder="trial_and_error",
-        )
-        trial_logger.error(f"Docker build failed with exit code {build_output.returncode}")
-        trial_logger.error(f"Error output: {build_output.stderr}")
-        trial_logger.info(f"Trial {num_trial} failed")
-        error_message = build_output.stderr
-        time_traveled_requirements = process_trial_and_error(
-            file_contents=file_contents,
-            requirements_data=time_traveled_requirements,
-            git_data=git_data,
-            error_message=error_message,
-            logger=trial_logger,
-        )
-        write_docker_files(
-            requirements_data=time_traveled_requirements,
-            git_data=git_data,
-            logger=trial_logger,
-        )
-        build_output = build_docker_images(
-            logger=trial_logger, build_name=f"trial_and_error_{num_trial}"
-        )
+        if num_trial > 0:
+            logger.info(f"Retry build trial {num_trial} failed")
+        else:
+            logger.info("First build failed")
+        try:
+            time_traveled_requirements, build_output = process_retry_build(
+                file_contents=file_contents,
+                requirements_data=time_traveled_requirements,
+                git_data=git_data,
+                error_message=build_output.stderr,
+                trial_num=num_trial,
+                parent_logger=logger,
+            )
+            if build_output.returncode == 0:
+                logger.info(
+                    f"After retry build trial {num_trial}, Docker build completed successfully"
+                )
+        except (RequirementsError, ValueError) as e:
+            logger.error(f"Build retry {num_trial} failed: {str(e)}")
+            break
         num_trial += 1
-        if build_output.returncode == 0:
-            logger.info("After trial and error, Docker build completed successfully")
 
     # Run the test in a Docker container
     test_command = (
         "pytest sklearn/cluster/tests/test_affinity_propagation.py::test_affinity_propagation"
     )
-    exit_code, logs = run_test_in_container(test_command, logger)
+    test_output = run_test_in_container(test_command, logger)
 
     num_test_retry = 0
-    while exit_code != 0 and num_test_retry < 3:
-        test_retry_logger = setup_logger(
-            logger_name=f"test_retry_{num_test_retry}", parent_logger=logger, subfolder="test_retry"
-        )
-        error_message = logs
-        prompt = retry_test(
-            file_contents=file_contents,
-            requirements_json=json.dumps(time_traveled_requirements, indent=2),
-            commit_hash=git_data["commit_hash"],
-            commit_date=git_data["commit_date"],
-            error_message=error_message,
-            test_command=test_command,
-        )
+    while test_output.returncode != 0 and num_test_retry < 3:
         try:
-            requirements_data_raw = anthropic_generate_json(
-                prompt=prompt,
-                logger=test_retry_logger,
-                output_filename="test_retry_output.json",
-            )
-            # NOTE: I hate python typing ... this is so immature
-            requirements_data_raw_cast: RequirementsData = {
-                "python_version": requirements_data_raw.get("python_version", "3.8"),
-                "apt_packages": requirements_data_raw.get("apt_packages", []),
-                "pip_packages": requirements_data_raw.get("pip_packages", {}),
-                "install_commands": requirements_data_raw.get("install_commands", ""),
-            }
-            time_traveled_requirements = time_travel_requirements(
-                requirements_data=requirements_data_raw_cast,
-                commit_date=git_data["commit_date"],
-                logger=test_retry_logger,
-            )
-            write_docker_files(
+            time_traveled_requirements, test_output = process_retry_test(
+                file_contents=file_contents,
                 requirements_data=time_traveled_requirements,
                 git_data=git_data,
-                logger=test_retry_logger,
+                error_message=test_output.stdout,
+                test_command=test_command,
+                trial_num=num_test_retry,
+                parent_logger=logger,
             )
-            build_output = build_docker_images(
-                logger=test_retry_logger, build_name=f"test_retry_{num_test_retry}"
-            )
-            if build_output.returncode != 0:
-                raise ValueError(
-                    f"During test retry, Docker build failed with exit code {build_output.returncode}"
-                )
-
-            exit_code, logs = run_test_in_container(test_command, test_retry_logger)
-            num_test_retry += 1
-        except RequirementsError:
-            logger.error("Claude thinks the error cannot be solved by updating the requirements.")
+            if test_output.returncode == 0:
+                logger.info(f"After retry test trial {num_test_retry}, test completed successfully")
+        except (RequirementsError, ValueError) as e:
+            logger.error(f"Test retry {num_test_retry} failed: {str(e)}")
+            break
+        num_test_retry += 1
