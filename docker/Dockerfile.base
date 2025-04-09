@@ -27,3 +27,8 @@ RUN wget 'https://github.com/conda-forge/miniforge/releases/latest/download/Mini
 ENV PATH=/opt/miniforge/bin:$PATH
 RUN mamba init --all
 RUN conda config --append channels conda-forge
+
+# Install conda environments
+COPY conda_install_base.sh /conda_install_base.sh
+RUN chmod +x /conda_install_base.sh
+RUN /conda_install_base.sh

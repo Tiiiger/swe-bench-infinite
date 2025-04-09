@@ -185,7 +185,7 @@ if __name__ == "__main__":
         "created_at"
     )
 
-    example = swe_bench[10]
+    example = swe_bench[11]
     git_data = clone_and_get_tree(
         repo_name=example["repo"],
         commit=example["base_commit"],
@@ -259,6 +259,7 @@ if __name__ == "__main__":
 
     # Build Docker images
     build_output = build_docker_images(logger=logger, build_name="first_build")
+    print("build_output: ", build_output)
 
     # Check if Docker build was successful
     num_trial = 0
