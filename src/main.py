@@ -261,15 +261,15 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Set up main logger
-    logger = setup_logger(debug=args.debug is not None)
-
     swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
     swe_bench = swe_bench.filter(lambda x: x["repo"] == "scikit-learn/scikit-learn").sort(
         "created_at"
     )
 
-    example = swe_bench[50]
+    example = swe_bench[100]
+
+    # Set up main logger
+    logger = setup_logger(debug=args.debug is not None, instance_id=example["instance_id"])
     git_data = clone_and_get_tree(
         repo_name=example["repo"],
         commit=example["base_commit"],
