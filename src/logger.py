@@ -10,6 +10,9 @@ class CustomLogger(logging.Logger):
         super().__init__(name, level)
         self.log_dir = None
         self._debug = False
+        self._is_root = False
+        self._parent_logger = None
+        self._timestamp = None
 
     def get_logdir(self):
         """Get the log directory used by this logger."""
@@ -19,35 +22,57 @@ class CustomLogger(logging.Logger):
         """Get whether this logger is in debug mode."""
         return self._debug
 
-    def setup(self, parent_logger=None, subfolder="", debug=False):
+    def is_root(self):
+        """Get whether this logger is a root logger."""
+        return self._is_root
+
+    def get_parent(self):
+        """Get the parent logger if this is a child logger."""
+        return self._parent_logger
+
+    def get_timestamp(self):
+        """Get the timestamp used by this logger."""
+        return self._timestamp
+
+    def setup(self, parent_logger=None, debug=False):
         """
         Set up the logger with console and file handlers.
 
         Args:
             parent_logger (logging.Logger, optional): Parent logger to inherit timestamp and debug flag from
-            subfolder (str, optional): Subfolder to create within the timestamp directory
             debug (bool, optional): Whether to add a debug tag to the log directory. If parent_logger is provided,
                                   this value will be overridden by the parent's debug status.
 
         Returns:
             CustomLogger: Self, for method chaining
         """
-        # Determine timestamp and debug status from parent logger or create new ones
-        if parent_logger and hasattr(parent_logger, "handlers") and len(parent_logger.handlers) > 1:
-            timestamp = parent_logger.handlers[1].baseFilename.split("/")[-2]
-            # Remove debug suffix if present
-            if timestamp.endswith("_debug"):
-                timestamp = timestamp[:-6]
-                self._debug = True  # Inherit debug status from parent
+        # Determine if this is a root logger
+        self._is_root = parent_logger is None and self.name == "main"
+
+        # Set parent logger reference
+        self._parent_logger = parent_logger
+
+        # Determine timestamp and debug status
+        if parent_logger and isinstance(parent_logger, CustomLogger):
+            # Inherit timestamp and debug status from parent
+            self._timestamp = parent_logger.get_timestamp()
+            self._debug = parent_logger.is_debug()
         else:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Create new timestamp
+            self._timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            if debug and self._is_root:
+                self._debug = True
 
         # Create log directory
-        log_dir = f"exps/{timestamp}"
-        if debug and self.name == "main":
-            log_dir = f"{log_dir}_debug"
-        if subfolder:
-            log_dir = f"{log_dir}/{subfolder}"
+        if self._is_root:
+            # Root logger always creates a new base directory
+            log_dir = f"exps/{self._timestamp}"
+            if self._debug:
+                log_dir = f"{log_dir}_debug"
+        else:
+            # Child logger uses parent's directory and adds its name as subfolder
+            base_dir = parent_logger.get_logdir()
+            log_dir = f"{base_dir}/{self.name}"
 
         pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
         self.log_dir = log_dir
@@ -81,8 +106,8 @@ class CustomLogger(logging.Logger):
         self.addHandler(file_handler)
 
         # Log initialization message
-        if self.name == "main":
-            self.info(f"Logging to {log_file}")
+        if self._is_root:
+            self.info(f"Root logger initialized - logging to {log_file}")
         else:
             self.info(f"{self.name} logger initialized - writing to {log_file}")
 
@@ -93,14 +118,13 @@ class CustomLogger(logging.Logger):
 logging.setLoggerClass(CustomLogger)
 
 
-def setup_logger(logger_name="main", parent_logger=None, subfolder="", debug=False):
+def setup_logger(logger_name="main", parent_logger=None, debug=False):
     """
     Set up and return a logger that writes to both console and a file.
 
     Args:
         logger_name (str): Name of the logger (default: "main")
         parent_logger (logging.Logger, optional): Parent logger to inherit timestamp from
-        subfolder (str, optional): Subfolder to create within the timestamp directory
         debug (bool, optional): Whether to add a debug tag to the log directory
 
     Returns:
@@ -109,7 +133,7 @@ def setup_logger(logger_name="main", parent_logger=None, subfolder="", debug=Fal
     logger = logging.getLogger(logger_name)
 
     if isinstance(logger, CustomLogger):
-        return logger.setup(parent_logger=parent_logger, subfolder=subfolder, debug=debug)
+        return logger.setup(parent_logger=parent_logger, debug=debug)
     else:
         # Fallback for non-CustomLogger instances (should not happen if setLoggerClass is working)
         raise TypeError(
@@ -125,7 +149,7 @@ if __name__ == "__main__":
     print(f"Main logger directory: {main_logdir}")
 
     # Set up a child logger
-    child_logger = setup_logger(logger_name="child", parent_logger=main_logger, subfolder="child")
+    child_logger = setup_logger(logger_name="child", parent_logger=main_logger)
     child_logdir = child_logger.get_logdir()
     print(f"Child logger directory: {child_logdir}")
 

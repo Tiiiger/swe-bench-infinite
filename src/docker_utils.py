@@ -171,9 +171,7 @@ def build_docker_images(
     docker.from_env()  # type: ignore[attr-defined]
 
     # add a child logger for docker build logs
-    docker_build_logger = setup_logger(
-        f"docker_{build_name}", parent_logger=logger, subfolder=f"docker_{build_name}"
-    )
+    docker_build_logger = setup_logger(f"docker_{build_name}", parent_logger=logger)
 
     # write docker files
     write_docker_files(requirements_data, git_data, docker_build_logger)

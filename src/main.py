@@ -8,7 +8,7 @@ from typing import Dict
 import datasets
 from anthropic_client import AnthropicClient
 from data_types import GitRepoData, RequirementsData
-from docker_utils import build_docker_images, run_test_in_container, write_docker_files
+from docker_utils import build_docker_images, run_test_in_container
 from exceptions import RequirementsError
 from git_utils import clone_and_get_tree, load_file_contents
 from pipeline.build_retry import retry_installation
@@ -38,9 +38,7 @@ def process_localization(result: GitRepoData, logger: CustomLogger) -> Dict[str,
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    loc_logger = setup_logger(
-        logger_name="localization", parent_logger=logger, subfolder="localization"
-    )
+    loc_logger = setup_logger(logger_name="localization", parent_logger=logger)
 
     # Localize requirements
     prompt = localize_requirements(
@@ -80,9 +78,7 @@ def process_requirements_collection(
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    req_logger = setup_logger(
-        logger_name="requirements_collection", parent_logger=logger, subfolder="requirements"
-    )
+    req_logger = setup_logger(logger_name="requirements_collection", parent_logger=logger)
 
     # Collect requirements
     prompt = collect_requirements(
@@ -135,7 +131,6 @@ def process_retry_build(
     build_retry_logger = setup_logger(
         logger_name=f"retry_build_{trial_num}",
         parent_logger=parent_logger,
-        subfolder=f"retry_build_{trial_num}",
     )
 
     prompt = retry_installation(
@@ -162,11 +157,6 @@ def process_retry_build(
         time_traveled_requirements = time_travel_requirements(
             requirements_data=requirements_data_raw_cast,
             commit_date=git_data["commit_date"],
-            logger=build_retry_logger,
-        )
-        write_docker_files(
-            requirements_data=time_traveled_requirements,
-            git_data=git_data,
             logger=build_retry_logger,
         )
         build_output = build_docker_images(
@@ -211,7 +201,6 @@ def process_retry_test(
     test_retry_logger = setup_logger(
         logger_name=f"retry_test_{trial_num}",
         parent_logger=parent_logger,
-        subfolder=f"retry_test_{trial_num}",
     )
 
     prompt = retry_test(
@@ -239,11 +228,6 @@ def process_retry_test(
         time_traveled_requirements = time_travel_requirements(
             requirements_data=requirements_data_raw_cast,
             commit_date=git_data["commit_date"],
-            logger=test_retry_logger,
-        )
-        write_docker_files(
-            requirements_data=time_traveled_requirements,
-            git_data=git_data,
             logger=test_retry_logger,
         )
         build_output = build_docker_images(
@@ -285,7 +269,7 @@ if __name__ == "__main__":
         "created_at"
     )
 
-    example = swe_bench[11]
+    example = swe_bench[50]
     git_data = clone_and_get_tree(
         repo_name=example["repo"],
         commit=example["base_commit"],
@@ -380,6 +364,12 @@ if __name__ == "__main__":
             logger.error(f"Build retry {num_trial} failed: {str(e)}")
             break
         num_trial += 1
+
+    if build_output.returncode != 0:
+        logger.error("Docker build failed after 3 retries")
+        exit(1)
+    else:
+        logger.info("Instance Docker build completed successfully")
 
     # Run the test in a Docker container
     test_command = (
