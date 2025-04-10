@@ -73,6 +73,10 @@ def load_file_contents(
 
         # Load file contents
         for file_path in file_paths:
+            # if file_path is a directory, skip
+            if os.path.isdir(file_path):
+                logger.info(f"Skipping directory {file_path}")
+                continue
             try:
                 with open(file_path, "r") as f:
                     file_contents[file_path] = f.read()

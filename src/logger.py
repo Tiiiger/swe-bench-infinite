@@ -16,8 +16,10 @@ class CustomLogger(logging.Logger):
         self._timestamp = None
         self._instance_id = None
 
-    def get_logdir(self):
+    def get_logdir(self) -> str:
         """Get the log directory used by this logger."""
+        if self.log_dir is None:
+            raise ValueError("Log directory not set")
         return self.log_dir
 
     def is_debug(self):
@@ -56,7 +58,7 @@ class CustomLogger(logging.Logger):
             CustomLogger: Self, for method chaining
         """
         # Determine if this is a root logger
-        self._is_root = parent_logger is None and self.name == "main"
+        self._is_root = parent_logger is None
         os.makedirs(root_dir, exist_ok=True)
 
         # Set parent logger reference
@@ -76,7 +78,7 @@ class CustomLogger(logging.Logger):
                 self._debug = True
 
         # Create log directory
-        if self._is_root:
+        if parent_logger is None:
             # Root logger always creates a new base directory
             log_dir = f"{root_dir}/{self._instance_id}_run_{self._timestamp}"
             if self._debug:
@@ -93,12 +95,12 @@ class CustomLogger(logging.Logger):
         log_file = f"{log_dir}/{self.name}.log"
 
         # Remove any existing handlers to avoid duplicate logs
-        if self.handlers:
-            for handler in self.handlers:
-                self.removeHandler(handler)
+        for handler in self.handlers[:]:
+            self.removeHandler(handler)
 
-        # Set log level
+        # Set log level and prevent propagation
         self.setLevel(logging.DEBUG)
+        self.propagate = False  # Prevent messages from being passed to parent loggers
 
         # Create console handler
         console_handler = logging.StreamHandler()

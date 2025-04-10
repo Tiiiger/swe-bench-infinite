@@ -3,12 +3,15 @@ import logging
 import os
 import shutil
 import subprocess
+import tarfile
+import threading
 import time
-from typing import Optional
+from pathlib import Path
 
 from data_types import GitRepoData, RequirementsData
 
 import docker
+from docker.models.containers import Container
 from logger import setup_logger
 
 
@@ -110,7 +113,7 @@ def write_docker_files(
     logger.info(f"Docker configuration files written successfully to {log_subdir}")
 
 
-def custom_build_docker_images(path: str, dockerfile: str, tag: str):
+def custom_build_docker_images(path: str, dockerfile: str, tag: str) -> subprocess.CompletedProcess:
     """
     Build Docker images for the testbed environment using the Docker Python API.
 
@@ -123,7 +126,7 @@ def custom_build_docker_images(path: str, dockerfile: str, tag: str):
     # copy from docker.models.images.ImageCollection.build
     resp = client.api.build(path=path, dockerfile=dockerfile, tag=tag, decode=True)
     if isinstance(resp, str):
-        return (client.images.get(resp), [])
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=resp, stderr="")
     image_id = None
     full_log = ""
     has_error = False
@@ -222,41 +225,85 @@ def build_docker_images(
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=build_log, stderr="")
 
 
-def run_test_in_container(
-    test_command: str, logger: Optional[logging.Logger] = None
-) -> subprocess.CompletedProcess:
+def exec_run_with_timeout(
+    container: Container, cmd: str, timeout: int | None = 60
+) -> tuple[int, str, bool, float]:
     """
-    Run a test command in a Docker container.
+    Run a command in a container with a timeout.
 
     Args:
-        test_command (str): The test command to run in the container
-        logger (logging.Logger, optional): Logger for tracking operations
-
-    Returns:
-        subprocess.CompletedProcess: The result of running the test command
+        container (docker.Container): Container to run the command in.
+        cmd (str): Command to run.
+        timeout (int): Timeout in seconds.
     """
-    if logger:
-        logger.info(f"Running test command in Docker container: {test_command}")
+    # Local variables to store the result of executing the command
+    exec_result = b""
+    exec_id = None
+    exit_code = 1
+    exception = None
+    timed_out = False
 
-    # Create and start container
-    container = docker.from_env().containers.run(
-        "testbed:latest",
-        command="tail -f /dev/null",  # Keep container running
-        remove=True,  # Auto-remove when stopped
-        detach=True,  # Run in background
-    )
+    # Wrapper function to run the command
+    def run_command():
+        nonlocal exec_result, exec_id, exception, exit_code
+        try:
+            exec_id = container.client.api.exec_create(container.id, cmd)["Id"]  # type: ignore
+            exec_stream = container.client.api.exec_start(exec_id, stream=True)  # type: ignore
+            for chunk in exec_stream:
+                exec_result += chunk
+            # finish the command
+            exit_code = 0
+        except Exception as e:
+            exception = e
 
-    # Execute command in the running container
-    result = container.exec_run(f"conda run -n testbed {test_command}")
-    exit_code = result.exit_code
-    logs = result.output.decode("utf-8")
+    # Start the command in a separate thread
+    thread = threading.Thread(target=run_command)
+    start_time = time.time()
+    thread.start()
+    thread.join(timeout)
 
-    if logger:
-        logger.info(f"Command exited with code {exit_code}")
-        logger.info(logs)
+    if exception:
+        raise exception  # type: ignore
 
-    container.stop()
+    # If the thread is still alive, the command timed out
+    if thread.is_alive():
+        if exec_id is not None:
+            exec_pid = container.client.api.exec_inspect(exec_id)["Pid"]  # type: ignore
+            container.exec_run(f"kill -TERM {exec_pid}", detach=True)
+        timed_out = True
+    end_time = time.time()
+    return exit_code, exec_result.decode(), timed_out, end_time - start_time
 
-    return subprocess.CompletedProcess(
-        args=[test_command], returncode=exit_code, stdout=logs, stderr=""
-    )
+
+def copy_to_container(container: Container, src: Path, dst: Path):
+    """
+    Copy a file from local to a docker container
+
+    Args:
+        container (Container): Docker container to copy to
+        src (Path): Source file path
+        dst (Path): Destination file path in the container
+    """
+    # Check if destination path is valid
+    if os.path.dirname(dst) == "":
+        raise ValueError(f"Destination path parent directory cannot be empty!, dst: {dst}")
+
+    # temporary tar file
+    tar_path = src.with_suffix(".tar")
+    with tarfile.open(tar_path, "w") as tar:
+        tar.add(
+            src, arcname=dst.name
+        )  # use destination name, so after `put_archive`, name is correct
+
+    # get bytes for put_archive cmd
+    with open(tar_path, "rb") as tar_file:
+        data = tar_file.read()
+
+    # Make directory if necessary
+    container.exec_run(f"mkdir -p {dst.parent}")
+
+    # Send tar file to container and extract
+    container.put_archive(os.path.dirname(dst), data)
+
+    # clean up in locally and in container
+    tar_path.unlink()

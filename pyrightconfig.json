@@ -1,0 +1,5 @@
+{
+    "include": ["src"],
+    "extraPaths": ["src", "src/swe_bench"],
+    "typeCheckingMode": "basic",
+}

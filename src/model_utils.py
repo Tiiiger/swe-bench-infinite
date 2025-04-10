@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Dict
+from typing import Any
 
 from anthropic_client import AnthropicClient
 from exceptions import AnthropicResponseError, RequirementsError
@@ -12,7 +12,7 @@ from logger import CustomLogger
 
 def anthropic_generate_json(
     prompt: str, logger: CustomLogger, output_filename="output.json"
-) -> Dict[str, Any]:
+) -> Any:
     """
     Abstract function to handle Anthropic API calls, JSON extraction, and response logging.
 
