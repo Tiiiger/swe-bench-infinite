@@ -1,0 +1,3 @@
+[submodule "src/swe-bench"]
+	path = src/swe-bench
+	url = git@github.com:Tiiiger/SWE-bench.git
