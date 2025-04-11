@@ -1,14 +1,14 @@
 import argparse
 import json
+import multiprocessing
 import os
 import pathlib
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import datasets
-from anthropic_client import AnthropicClient
 from data_types import GitRepoData, RequirementsData
 from docker_utils import build_docker_images, copy_to_container, exec_run_with_timeout
 from exceptions import RequirementsError
@@ -334,6 +334,181 @@ def process_eval_report(
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=None, stderr=None)
 
 
+def process_single_example(
+    example: Dict[str, Any],
+    exp_name: str,
+    debug: Optional[str] = None,
+    print_to_stdout: bool = False,
+) -> bool:
+    """
+    Process a single example from SWE-Bench.
+
+    Args:
+        example: The example to process
+        exp_name: Name of the experiment
+        debug: Optional debug experiment timestamp
+        print_to_stdout: Whether to print logs to stdout
+
+    Returns:
+        bool: True if processing was successful, False otherwise
+    """
+    try:
+        test_spec = make_test_spec(example)  # type: ignore
+
+        # Set up main logger
+        logger = setup_logger(
+            debug=debug is not None,
+            instance_id=f"{exp_name}/{example['instance_id']}",
+            print_to_stdout=print_to_stdout,
+        )
+        git_data = clone_and_get_tree(
+            repo_name=example["repo"],  # type: ignore
+            commit=example["base_commit"],  # type: ignore
+            logger=logger,
+        )
+
+        if debug:
+            logger.info(f"Debug mode enabled, loading results from specified experiment: {debug}")
+            exp_dir = os.path.join("exps", debug)
+            if not os.path.exists(exp_dir) or not os.path.isdir(exp_dir):
+                logger.error(f"Specified experiment directory does not exist: {exp_dir}")
+                return False
+
+            logger.info(f"Loading from experiment directory: {exp_dir}")
+
+            # Load localization results
+            localization_file = os.path.join(exp_dir, "localization", "localization_output.json")
+            if not os.path.exists(localization_file):
+                logger.error(f"Localization output file not found: {localization_file}")
+                return False
+
+            with open(localization_file, "r") as f:
+                file_paths = json.load(f)
+                logger.info(f"Loaded localization data: {file_paths}")
+
+            # Load file contents
+            file_contents = load_file_contents(
+                file_paths=file_paths,
+                base_dir=pathlib.Path("playground/scikit-learn"),
+                logger=logger,
+            )
+
+            # Load requirements collection results
+            requirements_file = os.path.join(
+                exp_dir, "requirements_collection", "requirements_output.json"
+            )
+            if not os.path.exists(requirements_file):
+                logger.error(f"Requirements output file not found: {requirements_file}")
+                return False
+
+            with open(requirements_file, "r") as f:
+                requirements_data = json.load(f)
+                logger.info(f"Loaded requirements data: {requirements_data}")
+        else:
+            # Process localization - now creates its own logger
+            file_paths = process_localization(result=git_data, logger=logger)
+
+            # Load file contents
+            file_contents = load_file_contents(
+                file_paths=file_paths,
+                base_dir=pathlib.Path("playground/scikit-learn"),
+                logger=logger,
+            )
+
+            # Process requirements collection - now creates its own logger
+            requirements_data = process_requirements_collection(
+                file_contents=file_contents,
+                result=git_data,
+                logger=logger,
+            )
+
+        # Write Docker configuration files
+        time_traveled_requirements = time_travel_requirements(
+            requirements_data=requirements_data, commit_date=git_data["commit_date"], logger=logger
+        )
+        # Build Docker images
+        build_output = build_docker_images(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=logger,
+            build_name="first_build",
+            instance_id=f"{example['instance_id']}",
+            debug=debug is not None,
+        )
+
+        # Check if Docker build was successful
+        num_trial = 0
+        while build_output.returncode != 0 and num_trial < 3:
+            if num_trial > 0:
+                logger.info(f"Retry build trial {num_trial} failed")
+            else:
+                logger.info("First build failed")
+            try:
+                time_traveled_requirements, build_output = process_retry_build(
+                    file_contents=file_contents,
+                    requirements_data=time_traveled_requirements,
+                    git_data=git_data,
+                    error_message=build_output.stderr,
+                    trial_num=num_trial,
+                    parent_logger=logger,
+                )
+                if build_output.returncode == 0:
+                    logger.info(
+                        f"After retry build trial {num_trial}, Docker build completed successfully"
+                    )
+            except (RequirementsError, ValueError) as e:
+                logger.error(f"Build retry {num_trial} failed: {str(e)}")
+                break
+            num_trial += 1
+
+        if build_output.returncode != 0:
+            logger.error("Docker build failed after 3 retries")
+            return False
+        else:
+            logger.info("Instance Docker build completed successfully")
+
+        success = False
+        for num_eval_trial in range(3):
+            eval_report_result = process_eval_report(
+                test_spec=test_spec,
+                example=example,
+                parent_logger=logger,
+                trial_num=num_eval_trial,
+            )
+            if eval_report_result.returncode == 0:
+                logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
+                # copy the report.json from the eval_report_logger to the main logger
+                shutil.copy(
+                    Path(f"{logger.get_logdir()}/eval_report_{num_eval_trial}") / "report.json",
+                    Path(logger.get_logdir()) / "final_report.json",
+                )
+                success = True
+                break
+            else:
+                logger.error(f"Eval retry {num_eval_trial} failed: {eval_report_result.stderr}")
+                # retry test
+                process_retry_test(
+                    file_contents=file_contents,
+                    requirements_data=time_traveled_requirements,
+                    git_data=git_data,
+                    error_message=eval_report_result.stderr,
+                    test_command=test_spec.eval_script,
+                    trial_num=num_eval_trial,
+                    parent_logger=logger,
+                )
+
+        if not success:
+            logger.error("Eval failed after 3 retries")
+            return False
+        else:
+            logger.info("Eval completed successfully")
+            return True
+
+    except Exception as e:
+        logger.error(f"Error processing example {example['instance_id']}: {str(e)}")
+        return False
+
+
 # Main execution
 if __name__ == "__main__":
     # Parse command line arguments
@@ -343,153 +518,60 @@ if __name__ == "__main__":
         type=str,
         help="Load results from a specific experiment timestamp (format: YYYYMMDD_HHMMSS)",
     )
+    parser.add_argument(
+        "--num-processes",
+        type=int,
+        default=4,
+        help="Number of processes to use for parallel processing",
+    )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Starting index in the dataset",
+    )
+    parser.add_argument(
+        "--end-index",
+        type=int,
+        default=None,
+        help="Ending index in the dataset (exclusive)",
+    )
+    parser.add_argument(
+        "--exp-name",
+        type=str,
+        default="batchA",
+        help="Name of the experiment",
+    )
+    parser.add_argument(
+        "--print-to-stdout",
+        action="store_true",
+        help="Print logs to stdout in addition to files",
+    )
     args = parser.parse_args()
 
+    # Load SWE-Bench dataset
     swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
     swe_bench = swe_bench.filter(lambda x: x["repo"] == "scikit-learn/scikit-learn").sort(  # type: ignore
         "created_at"
     )
 
-    example = swe_bench[101]
-    test_spec = make_test_spec(example)  # type: ignore
+    # Determine the range of examples to process
+    end_idx = args.end_index if args.end_index is not None else len(swe_bench)
+    examples = [swe_bench[i] for i in range(args.start_index, end_idx)]
 
-    # Set up main logger
-    logger = setup_logger(debug=args.debug is not None, instance_id=example["instance_id"])
-    git_data = clone_and_get_tree(
-        repo_name=example["repo"],  # type: ignore
-        commit=example["base_commit"],  # type: ignore
-        logger=logger,
-    )
-
-    # Initialize Anthropic client
-    client = AnthropicClient()
-
-    if args.debug:
-        logger.info(f"Debug mode enabled, loading results from specified experiment: {args.debug}")
-        exp_dir = os.path.join("exps", args.debug)
-        if not os.path.exists(exp_dir) or not os.path.isdir(exp_dir):
-            logger.error(f"Specified experiment directory does not exist: {exp_dir}")
-            exit(1)
-
-        logger.info(f"Loading from experiment directory: {exp_dir}")
-
-        # Load localization results
-        localization_file = os.path.join(exp_dir, "localization", "localization_output.json")
-        if not os.path.exists(localization_file):
-            logger.error(f"Localization output file not found: {localization_file}")
-            exit(1)
-
-        with open(localization_file, "r") as f:
-            file_paths = json.load(f)
-            logger.info(f"Loaded localization data: {file_paths}")
-
-        # Load file contents
-        file_contents = load_file_contents(
-            file_paths=file_paths, base_dir=pathlib.Path("playground/scikit-learn"), logger=logger
+    # Create a pool of workers
+    with multiprocessing.Pool(processes=args.num_processes) as pool:
+        # Process examples in parallel
+        results = pool.starmap(
+            process_single_example,
+            [(example, args.exp_name, args.debug, args.print_to_stdout) for example in examples],
         )
 
-        # Load requirements collection results
-        requirements_file = os.path.join(
-            exp_dir, "requirements_collection", "requirements_output.json"
-        )
-        if not os.path.exists(requirements_file):
-            logger.error(f"Requirements output file not found: {requirements_file}")
-            exit(1)
-
-        with open(requirements_file, "r") as f:
-            requirements_data = json.load(f)
-            logger.info(f"Loaded requirements data: {requirements_data}")
-    else:
-        # Process localization - now creates its own logger
-        file_paths = process_localization(result=git_data, logger=logger)
-
-        # Load file contents
-        file_contents = load_file_contents(
-            file_paths=file_paths, base_dir=pathlib.Path("playground/scikit-learn"), logger=logger
-        )
-
-        # Process requirements collection - now creates its own logger
-        requirements_data = process_requirements_collection(
-            file_contents=file_contents,
-            result=git_data,
-            logger=logger,
-        )
-
-    # Write Docker configuration files
-    time_traveled_requirements = time_travel_requirements(
-        requirements_data=requirements_data, commit_date=git_data["commit_date"], logger=logger
-    )
-    # Build Docker images
-    build_output = build_docker_images(
-        requirements_data=time_traveled_requirements,
-        git_data=git_data,
-        logger=logger,
-        build_name="first_build",
-    )
-
-    # Check if Docker build was successful
-    num_trial = 0
-    while build_output.returncode != 0 and num_trial < 3:
-        if num_trial > 0:
-            logger.info(f"Retry build trial {num_trial} failed")
-        else:
-            logger.info("First build failed")
-        try:
-            time_traveled_requirements, build_output = process_retry_build(
-                file_contents=file_contents,
-                requirements_data=time_traveled_requirements,
-                git_data=git_data,
-                error_message=build_output.stderr,
-                trial_num=num_trial,
-                parent_logger=logger,
-            )
-            if build_output.returncode == 0:
-                logger.info(
-                    f"After retry build trial {num_trial}, Docker build completed successfully"
-                )
-        except (RequirementsError, ValueError) as e:
-            logger.error(f"Build retry {num_trial} failed: {str(e)}")
-            break
-        num_trial += 1
-
-    if build_output.returncode != 0:
-        logger.error("Docker build failed after 3 retries")
-        exit(1)
-    else:
-        logger.info("Instance Docker build completed successfully")
-
-    success = False
-    for num_eval_trial in range(3):
-        eval_report_result = process_eval_report(
-            test_spec=test_spec,
-            example=example,
-            parent_logger=logger,
-            trial_num=num_eval_trial,
-        )
-        if eval_report_result.returncode == 0:
-            logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
-            # copy the report.json from the eval_report_logger to the main logger
-            # TODO: clean up this mess around path and str later
-            shutil.copy(
-                Path(f"{logger.get_logdir()}/eval_report_{num_eval_trial}") / "report.json",
-                Path(logger.get_logdir()) / "final_report.json",
-            )
-            success = True
-            break
-        else:
-            logger.error(f"Eval retry {num_eval_trial} failed: {eval_report_result.stderr}")
-            # retry test
-            test_output = process_retry_test(
-                file_contents=file_contents,
-                requirements_data=time_traveled_requirements,
-                git_data=git_data,
-                error_message=eval_report_result.stderr,
-                test_command=test_spec.eval_script,
-                trial_num=num_eval_trial,
-                parent_logger=logger,
-            )
-
-    if not success:
-        logger.error("Eval failed after 3 retries")
-    else:
-        logger.info("Eval completed successfully")
+    # Print summary of results
+    total = len(results)
+    successful = sum(1 for r in results if r)
+    print("\nProcessing complete!")
+    print(f"Total examples processed: {total}")
+    print(f"Successful: {successful}")
+    print(f"Failed: {total - successful}")
+    print(f"Success rate: {(successful/total)*100:.2f}%")

@@ -19,6 +19,7 @@ def write_docker_files(
     requirements_data: RequirementsData,
     git_data: GitRepoData,
     logger,
+    debug: bool = False,
 ) -> None:
     """
     Write Docker configuration files based on requirements data.
@@ -84,6 +85,7 @@ def write_docker_files(
         f.write(requirements_data["install_commands"])
     log_paths["install_repo.sh"] = log_install_path
 
+    # In debug mode, copy all files to docker folder
     # Copy from logdir to docker folder only if content changed
     # NOTE: this is because Docker also checks the timestamp of the file
     # so if the content hasn't changed, we don't update these files to retrigger build
@@ -160,6 +162,8 @@ def build_docker_images(
     git_data: GitRepoData,
     logger: logging.Logger,
     build_name: str,
+    debug: bool = False,
+    instance_id: str = "",
 ):
     """
     Build Docker images for the testbed environment using the Docker Python API.
@@ -183,6 +187,7 @@ def build_docker_images(
     docker_build_logger.info("Building docker image (base)")
     start_time = time.time()
     base_result = custom_build_docker_images(
+        # base image always use the docker file in /dockerfile
         path="./docker",
         dockerfile="Dockerfile.base",
         tag="testbed-base:latest",
@@ -201,9 +206,9 @@ def build_docker_images(
     docker_build_logger.info("Building docker image (testbed)")
     start_time = time.time()
     testbed_result = custom_build_docker_images(
-        path="./docker",
+        path="./docker" if debug else docker_build_logger.get_logdir(),
         dockerfile="Dockerfile.env",
-        tag="testbed:latest",
+        tag=f"{instance_id}.test:latest",
     )
     testbed_build_time = time.time() - start_time
     docker_build_logger.info(

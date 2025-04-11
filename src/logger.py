@@ -42,9 +42,16 @@ class CustomLogger(logging.Logger):
         """Get the instance ID used by this logger."""
         return self._instance_id
 
-    def setup(self, parent_logger=None, debug=False, instance_id=None, root_dir="exps"):
+    def setup(
+        self,
+        parent_logger=None,
+        debug=False,
+        instance_id=None,
+        root_dir="exps",
+        print_to_stdout=False,
+    ):
         """
-        Set up the logger with console and file handlers.
+        Set up the logger with file handler and optionally console handler.
 
         Args:
             parent_logger (logging.Logger, optional): Parent logger to inherit timestamp and debug flag from
@@ -53,6 +60,7 @@ class CustomLogger(logging.Logger):
             instance_id (str, optional): Unique identifier for this logger instance. If parent_logger is provided,
                                       this value will be overridden by the parent's instance_id.
             root_dir (str, optional): Root directory for storing logs. Defaults to "exps".
+            print_to_stdout (bool, optional): Whether to print logs to stdout. Defaults to False.
 
         Returns:
             CustomLogger: Self, for method chaining
@@ -80,7 +88,7 @@ class CustomLogger(logging.Logger):
         # Create log directory
         if parent_logger is None:
             # Root logger always creates a new base directory
-            log_dir = f"{root_dir}/{self._instance_id}_run_{self._timestamp}"
+            log_dir = f"{root_dir}/{self._timestamp}@{self._instance_id}"
             if self._debug:
                 log_dir = f"{log_dir}_debug"
         else:
@@ -102,22 +110,21 @@ class CustomLogger(logging.Logger):
         self.setLevel(logging.DEBUG)
         self.propagate = False  # Prevent messages from being passed to parent loggers
 
-        # Create console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
+        # Create formatter
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
         # Create file handler
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(logging.DEBUG)
-
-        # Create formatter
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        console_handler.setFormatter(formatter)
         file_handler.setFormatter(formatter)
-
-        # Add handlers to logger
-        self.addHandler(console_handler)
         self.addHandler(file_handler)
+
+        # Add console handler if requested
+        if print_to_stdout:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(formatter)
+            self.addHandler(console_handler)
 
         # Log initialization message
         if self._is_root:
@@ -133,10 +140,15 @@ logging.setLoggerClass(CustomLogger)
 
 
 def setup_logger(
-    logger_name="main", parent_logger=None, debug=False, instance_id=None, root_dir="exps"
+    logger_name="main",
+    parent_logger=None,
+    debug=False,
+    instance_id=None,
+    root_dir="exps",
+    print_to_stdout=False,
 ):
     """
-    Set up and return a logger that writes to both console and a file.
+    Set up and return a logger that writes to file and optionally to console.
 
     Args:
         logger_name (str): Name of the logger (default: "main")
@@ -144,6 +156,7 @@ def setup_logger(
         debug (bool, optional): Whether to add a debug tag to the log directory
         instance_id (str, optional): Unique identifier for this logger instance
         root_dir (str, optional): Root directory for storing logs. Defaults to "exps".
+        print_to_stdout (bool, optional): Whether to print logs to stdout. Defaults to False.
 
     Returns:
         CustomLogger: Configured logger instance
@@ -152,7 +165,11 @@ def setup_logger(
 
     if isinstance(logger, CustomLogger):
         return logger.setup(
-            parent_logger=parent_logger, debug=debug, instance_id=instance_id, root_dir=root_dir
+            parent_logger=parent_logger,
+            debug=debug,
+            instance_id=instance_id,
+            root_dir=root_dir,
+            print_to_stdout=print_to_stdout,
         )
     else:
         # Fallback for non-CustomLogger instances (should not happen if setLoggerClass is working)
