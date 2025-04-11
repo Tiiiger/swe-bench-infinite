@@ -2,9 +2,10 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 import datasets
 from anthropic_client import AnthropicClient
@@ -15,6 +16,7 @@ from git_utils import clone_and_get_tree, load_file_contents
 from pipeline.build_retry import retry_installation
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
+from pipeline.test_retry import retry_test
 from swebench.harness.grading import get_eval_report
 from swebench.harness.test_spec.test_spec import make_test_spec
 from version_finder import time_travel_requirements
@@ -177,80 +179,159 @@ def process_retry_build(
         raise
 
 
-# def process_retry_test(
-#     file_contents: Dict[str, str],
-#     requirements_data: RequirementsData,
-#     git_data: GitRepoData,
-#     error_message: str,
-#     test_command: str,
-#     trial_num: int,
-#     parent_logger: CustomLogger,
-# ) -> tuple[RequirementsData, subprocess.CompletedProcess]:
-#     """
-#     Process the retry of a failed test by attempting to fix requirements and rebuild.
+def process_retry_test(
+    file_contents: Dict[str, str],
+    requirements_data: RequirementsData,
+    git_data: GitRepoData,
+    error_message: str,
+    test_command: str,
+    trial_num: int,
+    parent_logger: CustomLogger,
+) -> subprocess.CompletedProcess:
+    """
+    Process the retry of a failed test by attempting to fix requirements and rebuild.
 
-#     Args:
-#         file_contents (dict): Dictionary mapping file paths to their contents
-#         requirements_data (RequirementsData): Current requirements data
-#         git_data (GitRepoData): Dictionary containing commit_hash and commit_date
-#         error_message (str): The error message from the failed test
-#         test_command (str): The test command to run
-#         trial_num (int): The current trial number
-#         parent_logger (CustomLogger): Parent logger for tracking operations
+    Args:
+        file_contents (dict): Dictionary mapping file paths to their contents
+        requirements_data (RequirementsData): Current requirements data
+        git_data (GitRepoData): Dictionary containing commit_hash and commit_date
+        error_message (str): The error message from the failed test
+        test_command (str): The test command to run
+        trial_num (int): The current trial number
+        parent_logger (CustomLogger): Parent logger for tracking operations
 
-#     Returns:
-#         tuple[RequirementsData, subprocess.CompletedProcess]: Updated requirements data and test output
-#     """
-#     test_retry_logger = setup_logger(
-#         logger_name=f"retry_test_{trial_num}",
-#         parent_logger=parent_logger,
-#     )
+    Returns:
+        tuple[RequirementsData, subprocess.CompletedProcess]: Updated requirements data and test output
+    """
+    test_retry_logger = setup_logger(
+        logger_name=f"retry_test_{trial_num}",
+        parent_logger=parent_logger,
+    )
 
-#     prompt = retry_test(
-#         file_contents=file_contents,
-#         requirements_json=json.dumps(requirements_data, indent=2),
-#         commit_hash=git_data["commit_hash"],
-#         commit_date=git_data["commit_date"],
-#         error_message=error_message,
-#         test_command=test_command,
-#     )
+    prompt = retry_test(
+        file_contents=file_contents,
+        requirements_json=json.dumps(requirements_data, indent=2),
+        commit_hash=git_data["commit_hash"],
+        commit_date=git_data["commit_date"],
+        error_message=error_message,
+        test_command=test_command,
+    )
 
-#     try:
-#         requirements_data_raw = anthropic_generate_json(
-#             prompt=prompt,
-#             logger=test_retry_logger,
-#             output_filename="retry_test_output.json",
-#         )
-#         # NOTE: I hate python typing ... this is so immature
-#         requirements_data_raw_cast: RequirementsData = {
-#             "python_version": requirements_data_raw.get("python_version", "3.8"),
-#             "apt_packages": requirements_data_raw.get("apt_packages", []),
-#             "pip_packages": requirements_data_raw.get("pip_packages", {}),
-#             "install_commands": requirements_data_raw.get("install_commands", ""),
-#         }
-#         time_traveled_requirements = time_travel_requirements(
-#             requirements_data=requirements_data_raw_cast,
-#             commit_date=git_data["commit_date"],
-#             logger=test_retry_logger,
-#         )
-#         build_output = build_docker_images(
-#             requirements_data=time_traveled_requirements,
-#             git_data=git_data,
-#             logger=test_retry_logger,
-#             build_name=f"retry_test_{trial_num}",
-#         )
-#         if build_output.returncode != 0:
-#             raise ValueError(
-#                 f"During test retry, Docker build failed with exit code {build_output.returncode}"
-#             )
+    try:
+        requirements_data_raw = anthropic_generate_json(
+            prompt=prompt,
+            logger=test_retry_logger,
+            output_filename="retry_test_output.json",
+        )
+        # NOTE: I hate python typing ... this is so immature
+        requirements_data_raw_cast: RequirementsData = {
+            "python_version": requirements_data_raw.get("python_version", "3.8"),
+            "apt_packages": requirements_data_raw.get("apt_packages", []),
+            "pip_packages": requirements_data_raw.get("pip_packages", {}),
+            "install_commands": requirements_data_raw.get("install_commands", ""),
+        }
+        time_traveled_requirements = time_travel_requirements(
+            requirements_data=requirements_data_raw_cast,
+            commit_date=git_data["commit_date"],
+            logger=test_retry_logger,
+        )
+        build_output = build_docker_images(
+            requirements_data=time_traveled_requirements,
+            git_data=git_data,
+            logger=test_retry_logger,
+            build_name=f"retry_test_{trial_num}",
+        )
+        if build_output.returncode != 0:
+            raise ValueError(
+                f"During test retry, Docker build failed with exit code {build_output.returncode}"
+            )
 
-#         test_output = run_test_in_container(test_command, test_retry_logger)
-#         return time_traveled_requirements, test_output
-#     except RequirementsError:
-#         parent_logger.error(
-#             "Claude thinks the error cannot be solved by updating the requirements."
-#         )
-#         raise
+        return build_output
+    except RequirementsError:
+        parent_logger.error(
+            "Claude thinks the error cannot be solved by updating the requirements."
+        )
+        raise
+
+
+def process_eval_report(
+    test_spec: Any,
+    example: Any,
+    parent_logger: CustomLogger,
+    trial_num: int,
+) -> subprocess.CompletedProcess:
+    """
+    Process the evaluation report by running tests and generating a report.
+
+    Args:
+        test_spec: The test specification object
+        example: Dictionary containing instance data including patch and instance_id
+        logger: Logger instance for logging operations
+        container: Docker container instance
+
+    Returns:
+        Dict containing the evaluation report
+    """
+    # setup a separate logger for eval report
+    setup_logger(
+        logger_name=f"eval_report_{trial_num}",
+        parent_logger=parent_logger,
+    )
+
+    # Run the test in a Docker container
+    # Create and start container
+    container = docker.from_env().containers.run(
+        "testbed:latest",
+        command="tail -f /dev/null",  # Keep container running
+        remove=True,  # Auto-remove when stopped
+        detach=True,  # Run in background
+    )
+
+    # get patch diff
+    patch_diff_path = Path(logger.get_logdir()) / "patch.diff"
+    with open(patch_diff_path, "w") as f:
+        f.write(example["patch"])  # type: ignore
+
+    copy_to_container(container, patch_diff_path, Path("/patch.diff"))
+    exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
+        container, "conda run -n testbed git apply --verbose /patch.diff", timeout=600
+    )
+    logger.info(f"Patch output: {test_output_log}")
+    if exit_code != 0:
+        raise RuntimeError(f"Patch failed with exit code {exit_code}. This should not be retried.")
+
+    # write to logdir
+    eval_script_path = Path(logger.get_logdir()) / "eval.sh"
+    with open(eval_script_path, "w") as f:
+        f.write(test_spec.eval_script)
+
+    copy_to_container(container, eval_script_path, Path("/eval.sh"))
+    exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
+        container, "conda run -n testbed /bin/bash /eval.sh", timeout=600
+    )
+    logger.info(f"Test output: {test_output_log}")
+    with open(Path(logger.get_logdir()) / "test_output.log", "w") as f:
+        f.write(test_output_log)
+
+    if exit_code != 0:
+        return subprocess.CompletedProcess(
+            args=[], returncode=exit_code, stdout=test_output_log, stderr=None
+        )
+
+    report = get_eval_report(
+        test_spec=test_spec,
+        prediction={
+            "instance_id": example["instance_id"],
+            "model_patch": example["patch"],  # type: ignore
+            "model_name_or_path": "gold",
+        },
+        test_log_path=f"{logger.get_logdir()}/test_output.log",
+        include_tests_status=True,
+    )
+    with open(Path(logger.get_logdir()) / "report.json", "w") as f:
+        json.dump(report, f, indent=2)
+
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=None, stderr=None)
 
 
 # Main execution
@@ -377,69 +458,38 @@ if __name__ == "__main__":
     else:
         logger.info("Instance Docker build completed successfully")
 
-    # Run the test in a Docker container
-    # Create and start container
-    container = docker.from_env().containers.run(
-        "testbed:latest",
-        command="tail -f /dev/null",  # Keep container running
-        remove=True,  # Auto-remove when stopped
-        detach=True,  # Run in background
-    )
+    success = False
+    for num_eval_trial in range(3):
+        eval_report_result = process_eval_report(
+            test_spec=test_spec,
+            example=example,
+            parent_logger=logger,
+            trial_num=num_eval_trial,
+        )
+        if eval_report_result.returncode == 0:
+            logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
+            # copy the report.json from the eval_report_logger to the main logger
+            # TODO: clean up this mess around path and str later
+            shutil.copy(
+                Path(f"{logger.get_logdir()}/eval_report_{num_eval_trial}") / "report.json",
+                Path(logger.get_logdir()) / "final_report.json",
+            )
+            success = True
+            break
+        else:
+            logger.error(f"Eval retry {num_eval_trial} failed: {eval_report_result.stderr}")
+            # retry test
+            test_output = process_retry_test(
+                file_contents=file_contents,
+                requirements_data=time_traveled_requirements,
+                git_data=git_data,
+                error_message=eval_report_result.stderr,
+                test_command=test_spec.eval_script,
+                trial_num=num_eval_trial,
+                parent_logger=logger,
+            )
 
-    # get patch diff
-    patch_diff_path = Path(logger.get_logdir()) / "patch.diff"
-    with open(patch_diff_path, "w") as f:
-        f.write(example["patch"])  # type: ignore
-
-    copy_to_container(container, patch_diff_path, Path("/patch.diff"))
-    exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
-        container, "conda run -n testbed git apply --verbose /patch.diff", timeout=600
-    )
-    logger.info(f"Patch output: {test_output_log}")
-
-    # write to logdir
-    eval_script_path = Path(logger.get_logdir()) / "eval.sh"
-    with open(eval_script_path, "w") as f:
-        f.write(test_spec.eval_script)
-
-    copy_to_container(container, eval_script_path, Path("/eval.sh"))
-    exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
-        container, "conda run -n testbed /bin/bash /eval.sh", timeout=600
-    )
-    logger.info(f"Test output: {test_output_log}")
-    with open(Path(logger.get_logdir()) / "test_output.log", "w") as f:
-        f.write(test_output_log)
-
-    logger.info(f"Test exit code: {exit_code}")
-
-    report = get_eval_report(
-        test_spec=test_spec,
-        prediction={
-            "instance_id": example["instance_id"],
-            "model_patch": example["patch"],  # type: ignore
-            "model_name_or_path": "gold",
-        },
-        test_log_path=f"{logger.get_logdir()}/test_output.log",
-        include_tests_status=True,
-    )
-    with open(Path(logger.get_logdir()) / "report.json", "w") as f:
-        json.dump(report, f, indent=2)
-
-    # num_test_retry = 0
-    # while exit_code != 0 and num_test_retry < 3:
-    #     try:
-    #         time_traveled_requirements, test_output = process_retry_test(
-    #             file_contents=file_contents,
-    #             requirements_data=time_traveled_requirements,
-    #             git_data=git_data,
-    #             error_message=test_output_log,
-    #             test_command=test_spec.eval_script,
-    #             trial_num=num_test_retry,
-    #             parent_logger=logger,
-    #         )
-    #         if test_output.returncode == 0:
-    #             logger.info(f"After retry test trial {num_test_retry}, test completed successfully")
-    #     except (RequirementsError, ValueError) as e:
-    #         logger.error(f"Test retry {num_test_retry} failed: {str(e)}")
-    #         break
-    #     num_test_retry += 1
+    if not success:
+        logger.error("Eval failed after 3 retries")
+    else:
+        logger.info("Eval completed successfully")
