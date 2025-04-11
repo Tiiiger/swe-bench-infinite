@@ -48,7 +48,6 @@ class CustomLogger(logging.Logger):
         debug=False,
         instance_id=None,
         root_dir="exps",
-        print_to_stdout=False,
     ):
         """
         Set up the logger with file handler and optionally console handler.
@@ -69,7 +68,6 @@ class CustomLogger(logging.Logger):
         self._is_root = parent_logger is None
         if self._is_root:
             os.makedirs(root_dir, exist_ok=True)
-            print(f"Root directory: {root_dir}")
 
         # Set parent logger reference
         self._parent_logger = parent_logger
@@ -122,7 +120,7 @@ class CustomLogger(logging.Logger):
         self.addHandler(file_handler)
 
         # Add console handler if requested
-        if print_to_stdout:
+        if debug:
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
             console_handler.setFormatter(formatter)
@@ -171,7 +169,6 @@ def setup_logger(
             debug=debug,
             instance_id=instance_id,
             root_dir=root_dir,
-            print_to_stdout=print_to_stdout,
         )
     else:
         # Fallback for non-CustomLogger instances (should not happen if setLoggerClass is working)

@@ -18,7 +18,6 @@ def retry_test(
     prompt = prompt.replace("{commit_date}", commit_date)
     prompt = prompt.replace("{error_message}", error_message)
     prompt = prompt.replace("{test_command}", test_command)
-    print(prompt)
     return prompt
 
 

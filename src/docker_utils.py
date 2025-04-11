@@ -261,8 +261,8 @@ def exec_run_with_timeout(
             exec_stream = container.client.api.exec_start(exec_id, stream=True)  # type: ignore
             for chunk in exec_stream:
                 exec_result += chunk
-            # finish the command
-            exit_code = 0
+            # Get the exit code after command completes
+            exit_code = container.client.api.exec_inspect(exec_id)["ExitCode"]  # type: ignore
         except Exception as e:
             exception = e
 

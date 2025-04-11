@@ -16,7 +16,6 @@ def retry_installation(
     prompt = prompt.replace("{commit_hash}", commit_hash)
     prompt = prompt.replace("{commit_date}", commit_date)
     prompt = prompt.replace("{error_message}", error_message)
-    print(prompt)
     return prompt
 
 

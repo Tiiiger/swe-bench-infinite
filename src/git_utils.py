@@ -46,14 +46,17 @@ if __name__ == "__main__":
 
 
 def load_file_contents(
-    file_paths: List[str], base_dir: str | pathlib.Path, logger: Optional[logging.Logger] = None
+    git_data: GitRepoData,
+    file_paths: List[str],
+    base_dir: str | pathlib.Path,
+    logger: Optional[logging.Logger] = None,
 ) -> Dict[str, str]:
     """
-    Load the contents of files from a list of file paths, changing to a base directory first.
+    Load the contents of files from a list of file paths, using absolute paths.
 
     Args:
         file_paths (list): List of file paths to load
-        base_dir (str): Base directory to change to before loading files
+        base_dir (str): Base directory to load files from
         logger (logging.Logger, optional): Logger for tracking operations
 
     Returns:
@@ -62,31 +65,41 @@ def load_file_contents(
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    # Save current working directory
-    current_dir = os.getcwd()
-
     file_contents = {}
     try:
-        # Change to base directory
-        os.chdir(base_dir)
-        logger.info(f"Changed directory to {base_dir}")
+        # Convert base_dir to absolute path
+        base_dir = pathlib.Path(base_dir).resolve()
+        logger.info(f"Using base directory: {base_dir}")
+
+        # checkout the commit
+        checkout_result = subprocess.run(
+            args=["git", "checkout", git_data["commit_hash"]],
+            cwd=base_dir,
+            capture_output=True,
+            text=True,
+        )
+        if checkout_result.stdout:
+            logger.debug(f"Git checkout stdout: {checkout_result.stdout}")
+        if checkout_result.stderr:
+            logger.debug(f"Git checkout stderr: {checkout_result.stderr}")
 
         # Load file contents
         for file_path in file_paths:
+            # Convert to absolute path
+            abs_file_path = base_dir / file_path
             # if file_path is a directory, skip
-            if os.path.isdir(file_path):
+            if abs_file_path.is_dir():
                 logger.info(f"Skipping directory {file_path}")
                 continue
             try:
-                with open(file_path, "r") as f:
+                with open(abs_file_path, "r") as f:
                     file_contents[file_path] = f.read()
                 logger.info(f"Loaded content for {file_path}")
             except Exception as e:
                 logger.error(f"Error loading {file_path}: {e}")
-    finally:
-        # Restore original directory
-        os.chdir(current_dir)
-        logger.info(f"Restored directory to {current_dir}")
+    except Exception as e:
+        logger.error(f"Error in load_file_contents: {e}")
+        raise
 
     return file_contents
 
@@ -116,36 +129,39 @@ def clone_and_get_tree(
     # Extract timestamp from parent logger
     clone_logger = setup_logger(logger_name="clone_and_get_tree", parent_logger=logger)
 
-    # save current working directory
-    current_dir = os.getcwd()
-
-    # Move to playground
-    os.makedirs("playground", exist_ok=True)
-    clone_logger.info("Changing to playground directory")
-    os.chdir("playground")
+    # Create playground directory with absolute path
+    playground_dir = pathlib.Path("playground").resolve()
+    playground_dir.mkdir(exist_ok=True)
+    clone_logger.info(f"Using playground directory: {playground_dir}")
 
     # get the repo url
     repo_url = get_repo_url(repo_name)
-    target_dir = repo_name.split("/")[-1]
+    target_dir = playground_dir / repo_name.split("/")[-1]
 
     # Check if repo already exists
-    if not os.path.exists(target_dir):
+    if not target_dir.exists():
         # Clone the repo
         clone_logger.info(f"Cloning repository {repo_url} to {target_dir}...")
-        subprocess.run(args=["git", "clone", repo_url, target_dir])
+        clone_result = subprocess.run(
+            args=["git", "clone", repo_url, str(target_dir)], capture_output=True, text=True
+        )
+        if clone_result.stdout:
+            clone_logger.debug(f"Git clone stdout: {clone_result.stdout}")
+        if clone_result.stderr:
+            clone_logger.debug(f"Git clone stderr: {clone_result.stderr}")
         clone_logger.info(f"Repository cloned successfully to {target_dir}")
     else:
         clone_logger.info(f"Repository already exists at {target_dir}, skipping clone")
 
-    # Move into the repo directory
-    clone_logger.debug(f"Changing directory to {target_dir}")
-    os.chdir(target_dir)
-
     # Verify the commit exists
     clone_logger.debug(f"Verifying commit {commit} exists...")
     verify_result = subprocess.run(
-        args=["git", "cat-file", "-e", commit], capture_output=True, text=True
+        args=["git", "cat-file", "-e", commit], capture_output=True, text=True, cwd=target_dir
     )
+    if verify_result.stdout:
+        clone_logger.debug(f"Git cat-file stdout: {verify_result.stdout}")
+    if verify_result.stderr:
+        clone_logger.debug(f"Git cat-file stderr: {verify_result.stderr}")
     if verify_result.returncode != 0:
         clone_logger.error(f"Error: Commit {commit} does not exist!")
         clone_logger.error(f"Error output: {verify_result.stderr}")
@@ -154,8 +170,12 @@ def clone_and_get_tree(
     # Check out the commit
     clone_logger.info(f"Checking out commit {commit}...")
     checkout_result = subprocess.run(
-        args=["git", "checkout", commit], capture_output=True, text=True
+        args=["git", "checkout", commit], capture_output=True, text=True, cwd=target_dir
     )
+    if checkout_result.stdout:
+        clone_logger.debug(f"Git checkout stdout: {checkout_result.stdout}")
+    if checkout_result.stderr:
+        clone_logger.debug(f"Git checkout stderr: {checkout_result.stderr}")
     if checkout_result.returncode != 0:
         clone_logger.error("Error checking out commit:")
         clone_logger.error(checkout_result.stderr)
@@ -170,20 +190,26 @@ def clone_and_get_tree(
         capture_output=True,
         text=True,
         check=True,
+        cwd=target_dir,
     )
+    if timestamp_result.stdout:
+        clone_logger.debug(f"Git show stdout: {timestamp_result.stdout}")
+    if timestamp_result.stderr:
+        clone_logger.debug(f"Git show stderr: {timestamp_result.stderr}")
     commit_date = timestamp_result.stdout.strip()
     clone_logger.info(f"Commit date: {commit_date}")
 
     # Get the repo tree
     clone_logger.info(f"Generating tree with depth {tree_depth}...")
     tree_result = subprocess.run(
-        args=f"tree -L {tree_depth}", shell=True, capture_output=True, text=True
+        args=f"tree -L {tree_depth}", shell=True, capture_output=True, text=True, cwd=target_dir
     )
+    if tree_result.stdout:
+        clone_logger.debug(f"Tree command stdout: {tree_result.stdout}")
+    if tree_result.stderr:
+        clone_logger.debug(f"Tree command stderr: {tree_result.stderr}")
 
     clone_logger.debug("Returning results")
-
-    # Move back to the current directory
-    os.chdir(current_dir)
 
     return {
         "commit_hash": commit,
@@ -194,13 +220,13 @@ def clone_and_get_tree(
 
 
 def get_head_commit_timestamp(
-    repo_path: str, logger: Optional[logging.Logger] = None
+    repo_path: str | pathlib.Path, logger: Optional[logging.Logger] = None
 ) -> Optional[str]:
     """
     Get the timestamp of the HEAD commit in a git repository.
 
     Args:
-        repo_path (str): Path to the git repository
+        repo_path (str | pathlib.Path): Path to the git repository
         logger (logging.Logger, optional): Logger for tracking operations
 
     Returns:
@@ -209,13 +235,10 @@ def get_head_commit_timestamp(
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    # Save current working directory
-    current_dir = os.getcwd()
-
     try:
-        # Change to repository directory
-        os.chdir(repo_path)
-        logger.info(f"Changed directory to {repo_path}")
+        # Convert to absolute path
+        repo_path = pathlib.Path(repo_path).resolve()
+        logger.info(f"Using repository path: {repo_path}")
 
         # Get timestamp of HEAD commit
         logger.info("Getting timestamp of HEAD commit...")
@@ -224,7 +247,12 @@ def get_head_commit_timestamp(
             capture_output=True,
             text=True,
             check=True,
+            cwd=str(repo_path),  # Convert Path to string for cwd
         )
+        if result.stdout:
+            logger.debug(f"Git show stdout: {result.stdout}")
+        if result.stderr:
+            logger.debug(f"Git show stderr: {result.stderr}")
 
         # Parse the timestamp
         timestamp = result.stdout.strip()
@@ -235,10 +263,6 @@ def get_head_commit_timestamp(
         logger.error(f"Error getting HEAD commit timestamp: {e}")
         logger.error(f"Error output: {e.stderr}")
         return None
-    finally:
-        # Restore original directory
-        os.chdir(current_dir)
-        logger.debug(f"Restored directory to {current_dir}")
 
 
 class TestGitUtils(unittest.TestCase):
@@ -251,7 +275,9 @@ class TestGitUtils(unittest.TestCase):
 
     def test_clone_and_get_tree(self):
         # Call the function being tested
-        result = clone_and_get_tree("scikit-learn/scikit-learn", "scikit-learn", "HEAD")
+        result = clone_and_get_tree(
+            "scikit-learn/scikit-learn", "HEAD", logger=logging.getLogger(__name__)
+        )
 
         # Verify the result
         self.assertEqual(result, "https://github.com/scikit-learn/scikit-learn")

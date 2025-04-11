@@ -31,6 +31,10 @@ def anthropic_generate_json(
     """
     client = AnthropicClient()
 
+    # save prompt to log file
+    with open(logger.get_logdir() + "/anthropic_prompt.txt", "w") as f:
+        f.write(prompt)
+
     logger.info("Sending prompt to Anthropic API...")
     response = client.create_message_with_retry(messages=[{"role": "user", "content": prompt}])
     logger.info("Received response from Anthropic API")
@@ -46,6 +50,16 @@ def anthropic_generate_json(
     # Save response to log file
     with open(logger.get_logdir() + "/anthropic_response.json", "w") as f:
         f.write(response_dump)
+
+    # Save usage to log file
+    with open(logger.get_logdir() + "/anthropic_usage.json", "w") as f:
+        usage = {
+            "output_tokens": response.usage.output_tokens,
+            "input_tokens": response.usage.input_tokens,
+            "cache_read_input_tokens": response.usage.cache_read_input_tokens,
+            "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
+        }
+        f.write(json.dumps(usage, indent=4))
 
     if text_block is None:
         logger.error("Expected text content block, got %s", content_block.type)

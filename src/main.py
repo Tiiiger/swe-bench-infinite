@@ -1,10 +1,12 @@
 import argparse
 import json
-import multiprocessing
 import os
 import pathlib
 import shutil
 import subprocess
+import threading
+import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -24,6 +26,9 @@ from version_finder import time_travel_requirements
 import docker
 from logger import CustomLogger, setup_logger
 from model_utils import anthropic_generate_json
+
+# Create a global lock for git operations
+git_lock = threading.Lock()
 
 
 def process_localization(result: GitRepoData, logger: CustomLogger) -> list[str]:
@@ -320,7 +325,7 @@ def process_eval_report(
 
     if exit_code != 0:
         return subprocess.CompletedProcess(
-            args=[], returncode=exit_code, stdout=test_output_log, stderr=None
+            args=[], returncode=exit_code, stdout=test_output_log, stderr=test_output_log
         )
 
     report = get_eval_report(
@@ -366,11 +371,16 @@ def process_single_example(
             print_to_stdout=debug is not None,
             root_dir=exp_name,
         )
-        git_data = clone_and_get_tree(
-            repo_name=example["repo"],  # type: ignore
-            commit=example["base_commit"],  # type: ignore
-            logger=logger,
-        )
+
+        # Protect git cloning operation with a lock
+        print("Trying to get git lock")
+        with git_lock:
+            print("Got git lock")
+            git_data = clone_and_get_tree(
+                repo_name=example["repo"],  # type: ignore
+                commit=example["base_commit"],  # type: ignore
+                logger=logger,
+            )
 
         if debug:
             logger.info(f"Debug mode enabled, loading results from specified experiment: {debug}")
@@ -392,11 +402,13 @@ def process_single_example(
                 logger.info(f"Loaded localization data: {file_paths}")
 
             # Load file contents
-            file_contents = load_file_contents(
-                file_paths=file_paths,
-                base_dir=pathlib.Path("playground/scikit-learn"),
-                logger=logger,
-            )
+            with git_lock:
+                file_contents = load_file_contents(
+                    file_paths=file_paths,
+                    base_dir=pathlib.Path("playground/scikit-learn"),
+                    logger=logger,
+                    git_data=git_data,
+                )
 
             # Load requirements collection results
             requirements_file = os.path.join(
@@ -414,11 +426,13 @@ def process_single_example(
             file_paths = process_localization(result=git_data, logger=logger)
 
             # Load file contents
-            file_contents = load_file_contents(
-                file_paths=file_paths,
-                base_dir=pathlib.Path("playground/scikit-learn"),
-                logger=logger,
-            )
+            with git_lock:
+                file_contents = load_file_contents(
+                    file_paths=file_paths,
+                    base_dir=pathlib.Path("playground/scikit-learn"),
+                    logger=logger,
+                    git_data=git_data,
+                )
 
             # Process requirements collection - now creates its own logger
             requirements_data = process_requirements_collection(
@@ -514,6 +528,7 @@ def process_single_example(
 
     except Exception as e:
         logger.error(f"Error processing example {example['instance_id']}: {str(e)}")
+        logger.error(f"Stack trace:\n{traceback.format_exc()}")
         return False
 
 
@@ -568,11 +583,13 @@ if __name__ == "__main__":
     examples = [swe_bench[i] for i in range(args.start_index, end_idx)]
 
     # Create a pool of workers
-    with multiprocessing.Pool(processes=args.num_processes) as pool:
+    with ThreadPoolExecutor(max_workers=args.num_processes) as executor:
         # Process examples in parallel
-        results = pool.starmap(
-            process_single_example,
-            [(example, args.exp_name, args.debug) for example in examples],
+        results = list(
+            executor.map(
+                lambda x: process_single_example(*x),
+                [(example, args.exp_name, args.debug) for example in examples],
+            )
         )
 
     # Print summary of results
