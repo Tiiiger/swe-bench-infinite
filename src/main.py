@@ -273,7 +273,7 @@ def process_eval_report(
         Dict containing the evaluation report
     """
     # setup a separate logger for eval report
-    setup_logger(
+    eval_report_logger = setup_logger(
         logger_name=f"eval_report_{trial_num}",
         parent_logger=parent_logger,
     )
@@ -288,7 +288,7 @@ def process_eval_report(
     )
 
     # get patch diff
-    patch_diff_path = Path(logger.get_logdir()) / "patch.diff"
+    patch_diff_path = Path(eval_report_logger.get_logdir()) / "patch.diff"
     with open(patch_diff_path, "w") as f:
         f.write(example["patch"])  # type: ignore
 
@@ -296,12 +296,12 @@ def process_eval_report(
     exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
         container, "conda run -n testbed git apply --verbose /patch.diff", timeout=600
     )
-    logger.info(f"Patch output: {test_output_log}")
+    eval_report_logger.info(f"Patch output: {test_output_log}")
     if exit_code != 0:
         raise RuntimeError(f"Patch failed with exit code {exit_code}. This should not be retried.")
 
     # write to logdir
-    eval_script_path = Path(logger.get_logdir()) / "eval.sh"
+    eval_script_path = Path(eval_report_logger.get_logdir()) / "eval.sh"
     with open(eval_script_path, "w") as f:
         f.write(test_spec.eval_script)
 
@@ -309,8 +309,8 @@ def process_eval_report(
     exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
         container, "conda run -n testbed /bin/bash /eval.sh", timeout=600
     )
-    logger.info(f"Test output: {test_output_log}")
-    with open(Path(logger.get_logdir()) / "test_output.log", "w") as f:
+    eval_report_logger.info(f"Test output: {test_output_log}")
+    with open(Path(eval_report_logger.get_logdir()) / "test_output.log", "w") as f:
         f.write(test_output_log)
 
     if exit_code != 0:
@@ -325,10 +325,10 @@ def process_eval_report(
             "model_patch": example["patch"],  # type: ignore
             "model_name_or_path": "gold",
         },
-        test_log_path=f"{logger.get_logdir()}/test_output.log",
+        test_log_path=f"{eval_report_logger.get_logdir()}/test_output.log",
         include_tests_status=True,
     )
-    with open(Path(logger.get_logdir()) / "report.json", "w") as f:
+    with open(Path(eval_report_logger.get_logdir()) / "report.json", "w") as f:
         json.dump(report, f, indent=2)
 
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=None, stderr=None)
@@ -350,7 +350,7 @@ if __name__ == "__main__":
         "created_at"
     )
 
-    example = swe_bench[100]
+    example = swe_bench[101]
     test_spec = make_test_spec(example)  # type: ignore
 
     # Set up main logger
