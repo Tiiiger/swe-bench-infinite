@@ -86,31 +86,36 @@ def write_docker_files(
     log_paths["install_repo.sh"] = log_install_path
 
     # In debug mode, copy all files to docker folder
-    # Copy from logdir to docker folder only if content changed
-    # NOTE: this is because Docker also checks the timestamp of the file
-    # so if the content hasn't changed, we don't update these files to retrigger build
-    for filename in docker_files:
-        log_path = log_paths[filename]
-        docker_path = os.path.join("docker", filename)
+    # this is because we want to skip rebuilding docker image
+    if debug:
+        # Copy from logdir to docker folder only if content changed
+        # NOTE: this is because Docker also checks the timestamp of the file
+        # so if the content hasn't changed, we don't update these files to retrigger build
+        for filename in docker_files:
+            log_path = log_paths[filename]
+            docker_path = os.path.join("docker", filename)
 
-        # Compute hash of the new file in logdir
-        with open(log_path, "rb") as f:
-            new_content_hash = hashlib.md5(f.read()).hexdigest()
+            # Compute hash of the new file in logdir
+            with open(log_path, "rb") as f:
+                new_content_hash = hashlib.md5(f.read()).hexdigest()
 
-        # Check if docker file exists and compute its hash
-        copy_needed = True
-        if os.path.exists(docker_path):
-            with open(docker_path, "rb") as f:
-                existing_content_hash = hashlib.md5(f.read()).hexdigest()
-            if existing_content_hash == new_content_hash:
-                copy_needed = False
+            # Check if docker file exists and compute its hash
+            copy_needed = True
+            if os.path.exists(docker_path):
+                with open(docker_path, "rb") as f:
+                    existing_content_hash = hashlib.md5(f.read()).hexdigest()
+                if existing_content_hash == new_content_hash:
+                    copy_needed = False
 
-        # Copy only if content has changed
-        if copy_needed:
-            shutil.copy2(log_path, docker_path)
-            logger.info(f"Updated {filename} in docker folder with new content")
-        else:
-            logger.info(f"Skipped copying {filename} to docker folder (content unchanged)")
+            # Copy only if content has changed
+            if copy_needed:
+                shutil.copy2(log_path, docker_path)
+                logger.info(f"Updated {filename} in docker folder with new content")
+            else:
+                logger.info(f"Skipped copying {filename} to docker folder (content unchanged)")
+    else:
+        # otherwise, copy docker file from docker folder to logdir
+        shutil.copy2("docker/Dockerfile.env", os.path.join(log_subdir, "Dockerfile.env"))
 
     logger.info(f"Docker configuration files written successfully to {log_subdir}")
 
@@ -162,8 +167,8 @@ def build_docker_images(
     git_data: GitRepoData,
     logger: logging.Logger,
     build_name: str,
+    instance_id: str,
     debug: bool = False,
-    instance_id: str = "",
 ):
     """
     Build Docker images for the testbed environment using the Docker Python API.

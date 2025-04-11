@@ -6,7 +6,6 @@ def localize_requirements(tree_result: str, commit_hash: str, commit_date: str):
     prompt = prompt.replace("{commit_hash}", commit_hash)
     prompt = prompt.replace("{commit_date}", commit_date)
     prompt = prompt.replace("{top_k}", str(10))
-    print(prompt)
     return prompt
 
 

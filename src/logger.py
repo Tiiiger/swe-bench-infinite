@@ -67,7 +67,9 @@ class CustomLogger(logging.Logger):
         """
         # Determine if this is a root logger
         self._is_root = parent_logger is None
-        os.makedirs(root_dir, exist_ok=True)
+        if self._is_root:
+            os.makedirs(root_dir, exist_ok=True)
+            print(f"Root directory: {root_dir}")
 
         # Set parent logger reference
         self._parent_logger = parent_logger

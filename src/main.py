@@ -117,6 +117,7 @@ def process_retry_build(
     git_data: GitRepoData,
     error_message: str,
     trial_num: int,
+    instance_id: str,
     parent_logger: CustomLogger,
 ) -> tuple[RequirementsData, subprocess.CompletedProcess]:
     """
@@ -169,6 +170,7 @@ def process_retry_build(
             git_data=git_data,
             logger=build_retry_logger,
             build_name=f"retry_build_{trial_num}",
+            instance_id=instance_id,
         )
 
         return time_traveled_requirements, build_output
@@ -186,6 +188,7 @@ def process_retry_test(
     error_message: str,
     test_command: str,
     trial_num: int,
+    instance_id: str,
     parent_logger: CustomLogger,
 ) -> subprocess.CompletedProcess:
     """
@@ -240,6 +243,7 @@ def process_retry_test(
             git_data=git_data,
             logger=test_retry_logger,
             build_name=f"retry_test_{trial_num}",
+            instance_id=instance_id,
         )
         if build_output.returncode != 0:
             raise ValueError(
@@ -259,6 +263,7 @@ def process_eval_report(
     example: Any,
     parent_logger: CustomLogger,
     trial_num: int,
+    instance_id: str,
 ) -> subprocess.CompletedProcess:
     """
     Process the evaluation report by running tests and generating a report.
@@ -281,7 +286,7 @@ def process_eval_report(
     # Run the test in a Docker container
     # Create and start container
     container = docker.from_env().containers.run(
-        "testbed:latest",
+        f"{instance_id}.test:latest",
         command="tail -f /dev/null",  # Keep container running
         remove=True,  # Auto-remove when stopped
         detach=True,  # Run in background
@@ -338,7 +343,6 @@ def process_single_example(
     example: Dict[str, Any],
     exp_name: str,
     debug: Optional[str] = None,
-    print_to_stdout: bool = False,
 ) -> bool:
     """
     Process a single example from SWE-Bench.
@@ -358,8 +362,9 @@ def process_single_example(
         # Set up main logger
         logger = setup_logger(
             debug=debug is not None,
-            instance_id=f"{exp_name}/{example['instance_id']}",
-            print_to_stdout=print_to_stdout,
+            instance_id=f"{example['instance_id']}",
+            print_to_stdout=debug is not None,
+            root_dir=exp_name,
         )
         git_data = clone_and_get_tree(
             repo_name=example["repo"],  # type: ignore
@@ -369,7 +374,7 @@ def process_single_example(
 
         if debug:
             logger.info(f"Debug mode enabled, loading results from specified experiment: {debug}")
-            exp_dir = os.path.join("exps", debug)
+            exp_dir = os.path.join(exp_name, debug)
             if not os.path.exists(exp_dir) or not os.path.isdir(exp_dir):
                 logger.error(f"Specified experiment directory does not exist: {exp_dir}")
                 return False
@@ -432,7 +437,7 @@ def process_single_example(
             git_data=git_data,
             logger=logger,
             build_name="first_build",
-            instance_id=f"{example['instance_id']}",
+            instance_id=example["instance_id"],
             debug=debug is not None,
         )
 
@@ -450,6 +455,7 @@ def process_single_example(
                     git_data=git_data,
                     error_message=build_output.stderr,
                     trial_num=num_trial,
+                    instance_id=example["instance_id"],
                     parent_logger=logger,
                 )
                 if build_output.returncode == 0:
@@ -474,6 +480,7 @@ def process_single_example(
                 example=example,
                 parent_logger=logger,
                 trial_num=num_eval_trial,
+                instance_id=f"{example['instance_id']}",
             )
             if eval_report_result.returncode == 0:
                 logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
@@ -494,6 +501,7 @@ def process_single_example(
                     error_message=eval_report_result.stderr,
                     test_command=test_spec.eval_script,
                     trial_num=num_eval_trial,
+                    instance_id=f"{example['instance_id']}",
                     parent_logger=logger,
                 )
 
@@ -564,7 +572,7 @@ if __name__ == "__main__":
         # Process examples in parallel
         results = pool.starmap(
             process_single_example,
-            [(example, args.exp_name, args.debug, args.print_to_stdout) for example in examples],
+            [(example, args.exp_name, args.debug) for example in examples],
         )
 
     # Print summary of results
