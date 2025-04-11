@@ -387,6 +387,7 @@ def process_single_example(
                 repo_name=example["repo"],  # type: ignore
                 commit=example["base_commit"],  # type: ignore
                 logger=logger,
+                instance_id=example["instance_id"],
             )
 
         if debug:
@@ -581,6 +582,13 @@ if __name__ == "__main__":
         help="Print logs to stdout in addition to files",
     )
     args = parser.parse_args()
+
+    # Force single process mode when debug is enabled
+    if args.debug is not None and args.num_processes > 1:
+        print(
+            f"Warning: Debug mode enabled. Setting num_processes to 1 (was {args.num_processes})."
+        )
+        args.num_processes = 1
 
     # Load SWE-Bench dataset
     swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
