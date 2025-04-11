@@ -15,6 +15,7 @@ from git_utils import clone_and_get_tree, load_file_contents
 from pipeline.build_retry import retry_installation
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
+from swebench.harness.grading import get_eval_report
 from swebench.harness.test_spec.test_spec import make_test_spec
 from version_finder import time_travel_requirements
 
@@ -264,9 +265,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
-    swe_bench = swe_bench.filter(lambda x: x["repo"] == "scikit-learn/scikit-learn").sort(
+    swe_bench = swe_bench.filter(lambda x: x["repo"] == "scikit-learn/scikit-learn").sort(  # type: ignore
         "created_at"
-    )  # type: ignore
+    )
 
     example = swe_bench[100]
     test_spec = make_test_spec(example)  # type: ignore
@@ -385,6 +386,17 @@ if __name__ == "__main__":
         detach=True,  # Run in background
     )
 
+    # get patch diff
+    patch_diff_path = Path(logger.get_logdir()) / "patch.diff"
+    with open(patch_diff_path, "w") as f:
+        f.write(example["patch"])  # type: ignore
+
+    copy_to_container(container, patch_diff_path, Path("/patch.diff"))
+    exit_code, test_output_log, timed_out, total_runtime = exec_run_with_timeout(
+        container, "conda run -n testbed git apply --verbose /patch.diff", timeout=600
+    )
+    logger.info(f"Patch output: {test_output_log}")
+
     # write to logdir
     eval_script_path = Path(logger.get_logdir()) / "eval.sh"
     with open(eval_script_path, "w") as f:
@@ -399,6 +411,19 @@ if __name__ == "__main__":
         f.write(test_output_log)
 
     logger.info(f"Test exit code: {exit_code}")
+
+    report = get_eval_report(
+        test_spec=test_spec,
+        prediction={
+            "instance_id": example["instance_id"],
+            "model_patch": example["patch"],  # type: ignore
+            "model_name_or_path": "gold",
+        },
+        test_log_path=f"{logger.get_logdir()}/test_output.log",
+        include_tests_status=True,
+    )
+    with open(Path(logger.get_logdir()) / "report.json", "w") as f:
+        json.dump(report, f, indent=2)
 
     # num_test_retry = 0
     # while exit_code != 0 and num_test_retry < 3:
