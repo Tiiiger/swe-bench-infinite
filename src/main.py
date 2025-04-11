@@ -31,7 +31,7 @@ from model_utils import anthropic_generate_json
 git_lock = threading.Lock()
 
 
-def process_localization(result: GitRepoData, logger: CustomLogger) -> list[str]:
+def process_localization(result: GitRepoData, logger: CustomLogger, instance_id: str) -> list[str]:
     """
     Process the localization of requirements for a given commit.
 
@@ -48,7 +48,9 @@ def process_localization(result: GitRepoData, logger: CustomLogger) -> list[str]
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    loc_logger = setup_logger(logger_name="localization", parent_logger=logger)
+    loc_logger = setup_logger(
+        logger_name="localization", parent_logger=logger, instance_id=instance_id
+    )
 
     # Localize requirements
     prompt = localize_requirements(
@@ -72,6 +74,7 @@ def process_requirements_collection(
     file_contents: Dict[str, str],
     result: GitRepoData,
     logger: CustomLogger,
+    instance_id: str,
 ) -> RequirementsData:
     """
     Process the collection of requirements and build the Docker environment.
@@ -88,7 +91,9 @@ def process_requirements_collection(
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    req_logger = setup_logger(logger_name="requirements_collection", parent_logger=logger)
+    req_logger = setup_logger(
+        logger_name="requirements_collection", parent_logger=logger, instance_id=instance_id
+    )
 
     # Collect requirements
     prompt = collect_requirements(
@@ -142,6 +147,7 @@ def process_retry_build(
     build_retry_logger = setup_logger(
         logger_name=f"retry_build_{trial_num}",
         parent_logger=parent_logger,
+        instance_id=instance_id,
     )
 
     prompt = retry_installation(
@@ -214,6 +220,7 @@ def process_retry_test(
     test_retry_logger = setup_logger(
         logger_name=f"retry_test_{trial_num}",
         parent_logger=parent_logger,
+        instance_id=instance_id,
     )
 
     prompt = retry_test(
@@ -286,6 +293,7 @@ def process_eval_report(
     eval_report_logger = setup_logger(
         logger_name=f"eval_report_{trial_num}",
         parent_logger=parent_logger,
+        instance_id=instance_id,
     )
 
     # Run the test in a Docker container
@@ -364,11 +372,10 @@ def process_single_example(
     try:
         test_spec = make_test_spec(example)  # type: ignore
 
-        # Set up main logger
+        # Set up main logger with the example's instance_id directly
         logger = setup_logger(
             debug=debug is not None,
-            instance_id=f"{example['instance_id']}",
-            print_to_stdout=debug is not None,
+            instance_id=example["instance_id"],
             root_dir=exp_name,
         )
 
@@ -423,7 +430,9 @@ def process_single_example(
                 logger.info(f"Loaded requirements data: {requirements_data}")
         else:
             # Process localization - now creates its own logger
-            file_paths = process_localization(result=git_data, logger=logger)
+            file_paths = process_localization(
+                result=git_data, logger=logger, instance_id=example["instance_id"]
+            )
 
             # Load file contents
             with git_lock:
@@ -439,6 +448,7 @@ def process_single_example(
                 file_contents=file_contents,
                 result=git_data,
                 logger=logger,
+                instance_id=example["instance_id"],
             )
 
         # Write Docker configuration files
@@ -494,7 +504,7 @@ def process_single_example(
                 example=example,
                 parent_logger=logger,
                 trial_num=num_eval_trial,
-                instance_id=f"{example['instance_id']}",
+                instance_id=example["instance_id"],
             )
             if eval_report_result.returncode == 0:
                 logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
@@ -515,7 +525,7 @@ def process_single_example(
                     error_message=eval_report_result.stderr,
                     test_command=test_spec.eval_script,
                     trial_num=num_eval_trial,
-                    instance_id=f"{example['instance_id']}",
+                    instance_id=example["instance_id"],
                     parent_logger=logger,
                 )
 

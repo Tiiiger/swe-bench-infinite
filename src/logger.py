@@ -13,7 +13,6 @@ class CustomLogger(logging.Logger):
         self._debug = False
         self._is_root = False
         self._parent_logger = None
-        self._timestamp = None
         self._instance_id = None
 
     def get_logdir(self) -> str:
@@ -34,10 +33,6 @@ class CustomLogger(logging.Logger):
         """Get the parent logger if this is a child logger."""
         return self._parent_logger
 
-    def get_timestamp(self):
-        """Get the timestamp used by this logger."""
-        return self._timestamp
-
     def get_instance_id(self):
         """Get the instance ID used by this logger."""
         return self._instance_id
@@ -53,17 +48,20 @@ class CustomLogger(logging.Logger):
         Set up the logger with file handler and optionally console handler.
 
         Args:
-            parent_logger (logging.Logger, optional): Parent logger to inherit timestamp and debug flag from
+            parent_logger (logging.Logger, optional): Parent logger to inherit debug flag from
             debug (bool, optional): Whether to add a debug tag to the log directory. If parent_logger is provided,
                                   this value will be overridden by the parent's debug status.
-            instance_id (str, optional): Unique identifier for this logger instance. If parent_logger is provided,
-                                      this value will be overridden by the parent's instance_id.
+            instance_id (str): Unique identifier for this logger instance. If parent_logger is provided,
+                             this value will be overridden by the parent's instance_id.
             root_dir (str, optional): Root directory for storing logs. Defaults to "exps".
-            print_to_stdout (bool, optional): Whether to print logs to stdout. Defaults to False.
 
         Returns:
             CustomLogger: Self, for method chaining
         """
+        # Verify instance_id is provided for root loggers
+        if parent_logger is None and instance_id is None:
+            raise ValueError("instance_id is required for root loggers")
+
         # Determine if this is a root logger
         self._is_root = parent_logger is None
         if self._is_root:
@@ -72,23 +70,22 @@ class CustomLogger(logging.Logger):
         # Set parent logger reference
         self._parent_logger = parent_logger
 
-        # Determine timestamp, debug status, and instance_id
+        # Determine debug status and instance_id
         if parent_logger and isinstance(parent_logger, CustomLogger):
-            # Inherit timestamp, debug status, and instance_id from parent
-            self._timestamp = parent_logger.get_timestamp()
+            # Inherit debug status and instance_id from parent
             self._debug = parent_logger.is_debug()
             self._instance_id = parent_logger.get_instance_id()
         else:
-            # Create new timestamp and set instance_id
-            self._timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Set instance_id and debug flag
             self._instance_id = instance_id
             if debug and self._is_root:
                 self._debug = True
 
         # Create log directory
         if parent_logger is None:
-            # Root logger always creates a new base directory
-            log_dir = f"{root_dir}/{self._timestamp}@{self._instance_id}"
+            # Root logger creates a directory with just the instance_id
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_dir = f"{root_dir}/{timestamp}@{self._instance_id}"
             if self._debug:
                 log_dir = f"{log_dir}_debug"
         else:
@@ -97,6 +94,7 @@ class CustomLogger(logging.Logger):
             log_dir = f"{base_dir}/{self.name}"
 
         pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
+        print(f"Add a logger at {log_dir}")
         self.log_dir = log_dir
 
         # Configure log file
@@ -140,28 +138,26 @@ logging.setLoggerClass(CustomLogger)
 
 
 def setup_logger(
+    instance_id,
     logger_name="main",
     parent_logger=None,
     debug=False,
-    instance_id=None,
     root_dir="exps",
-    print_to_stdout=False,
 ):
     """
     Set up and return a logger that writes to file and optionally to console.
 
     Args:
         logger_name (str): Name of the logger (default: "main")
-        parent_logger (logging.Logger, optional): Parent logger to inherit timestamp from
+        parent_logger (logging.Logger, optional): Parent logger to inherit from
         debug (bool, optional): Whether to add a debug tag to the log directory
-        instance_id (str, optional): Unique identifier for this logger instance
+        instance_id (str): Unique identifier for this logger instance (required if parent_logger is None)
         root_dir (str, optional): Root directory for storing logs. Defaults to "exps".
-        print_to_stdout (bool, optional): Whether to print logs to stdout. Defaults to False.
 
     Returns:
         CustomLogger: Configured logger instance
     """
-    logger = logging.getLogger(logger_name)
+    logger = logging.getLogger(f"{logger_name}_{instance_id}")
 
     if isinstance(logger, CustomLogger):
         return logger.setup(
@@ -185,7 +181,7 @@ if __name__ == "__main__":
     print(f"Main logger directory: {main_logdir}")
 
     # Set up a child logger
-    child_logger = setup_logger(logger_name="child", parent_logger=main_logger)
+    child_logger = setup_logger(logger_name="child", parent_logger=main_logger, instance_id="1")
     child_logdir = child_logger.get_logdir()
     print(f"Child logger directory: {child_logdir}")
 
