@@ -14,13 +14,19 @@ import datasets
 from data_types import GitRepoData, RequirementsData
 from docker_utils import build_docker_images, copy_to_container, exec_run_with_timeout
 from exceptions import RequirementsError
+from experiment_utils import (
+    find_docker_image,
+    find_latest_build_folder,
+    load_example_data,
+    save_example_data,
+)
 from git_utils import clone_and_get_tree, load_file_contents
 from pipeline.build_retry import retry_installation
 from pipeline.collect import collect_requirements
 from pipeline.localize import localize_requirements
 from pipeline.test_retry import retry_test
 from swebench.harness.grading import get_eval_report
-from swebench.harness.test_spec.test_spec import make_test_spec
+from swebench.harness.test_spec.test_spec import make_test_spec  # type: ignore
 from version_finder import time_travel_requirements
 
 import docker
@@ -362,8 +368,7 @@ def process_single_example(
     Args:
         example: The example to process
         exp_name: Name of the experiment
-        debug: Optional debug experiment timestamp
-        print_to_stdout: Whether to print logs to stdout
+        debug: Optional debug experiment timestamp (deprecated, kept for backward compatibility)
 
     Returns:
         bool: True if processing was successful, False otherwise
@@ -373,10 +378,14 @@ def process_single_example(
 
         # Set up main logger with the example's instance_id directly
         logger = setup_logger(
-            debug=debug is not None,
+            debug=False,  # Set debug to False, since we now use debug_path for debugging
             instance_id=example["instance_id"],
             root_dir=exp_name,
         )
+
+        # Save example data to JSON file
+        example_path = save_example_data(example, logger.get_logdir())
+        logger.info(f"Saved example data to {example_path}")
 
         # Protect git cloning operation with a lock
         print("Trying to get git lock")
@@ -390,6 +399,7 @@ def process_single_example(
             )
 
         if debug:
+            # This branch is deprecated and only kept for backward compatibility
             logger.info(f"Debug mode enabled, loading results from specified experiment: {debug}")
             exp_dir = os.path.join(exp_name, debug)
             if not os.path.exists(exp_dir) or not os.path.isdir(exp_dir):
@@ -412,7 +422,7 @@ def process_single_example(
             with git_lock:
                 file_contents = load_file_contents(
                     file_paths=file_paths,
-                    base_dir=pathlib.Path("playground/scikit-learn"),
+                    base_dir=pathlib.Path("playground") / example["repo"].split("/")[1],
                     logger=logger,
                     git_data=git_data,
                 )
@@ -431,14 +441,16 @@ def process_single_example(
         else:
             # Process localization - now creates its own logger
             file_paths = process_localization(
-                result=git_data, logger=logger, instance_id=example["instance_id"]
+                result=git_data,
+                logger=logger,
+                instance_id=example["instance_id"],
             )
 
             # Load file contents
             with git_lock:
                 file_contents = load_file_contents(
                     file_paths=file_paths,
-                    base_dir=pathlib.Path("playground/scikit-learn"),
+                    base_dir=pathlib.Path("playground") / example["repo"].split("/")[1],
                     logger=logger,
                     git_data=git_data,
                 )
@@ -462,7 +474,7 @@ def process_single_example(
             logger=logger,
             build_name="first_build",
             instance_id=example["instance_id"],
-            debug=debug is not None,
+            debug=None,  # Set debug to None, we use debug_path now
         )
 
         # Check if Docker build was successful
@@ -506,6 +518,7 @@ def process_single_example(
                 trial_num=num_eval_trial,
                 instance_id=example["instance_id"],
             )
+
             if eval_report_result.returncode == 0:
                 logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
                 # copy the report.json from the eval_report_logger to the main logger
@@ -542,14 +555,74 @@ def process_single_example(
         return False
 
 
+def debug_example(
+    debug_path: str,
+):
+    """
+    Debug a single example from SWE-Bench using previously generated artifacts.
+
+    Args:
+        debug_path: Path to the debug directory containing previous runs
+
+    Returns:
+        bool: True if debugging was successful, False otherwise
+    """
+    # Load example data from the debug path
+    example = load_example_data(debug_path)
+    if example is None:
+        return False
+
+    print(f"Loaded example data from {os.path.join(debug_path, 'example.json')}")
+    instance_id = example["instance_id"]
+
+    # Make test spec from the loaded example
+    test_spec = make_test_spec(example)  # type: ignore
+
+    # Set up main logger with the example's instance_id directly
+    logger = setup_logger(
+        debug=True,
+        instance_id=instance_id,
+        root_dir=os.path.dirname(debug_path),
+    )
+
+    logger.info(f"Debug mode enabled, loading results from: {debug_path}")
+
+    if not os.path.exists(debug_path) or not os.path.isdir(debug_path):
+        logger.error(f"Specified debug directory does not exist: {debug_path}")
+        return False
+
+    # Find the latest retry build or test folder
+    latest_folder = find_latest_build_folder(debug_path)
+    if latest_folder is None:
+        logger.error(f"No build or test folders found in {debug_path}")
+        return False
+
+    latest_folder_name, latest_folder_path = latest_folder
+    logger.info(f"Using latest folder: {latest_folder_name} at {latest_folder_path}")
+
+    # Check if Docker image exists
+    if not find_docker_image(instance_id, logger):
+        return False
+
+    # Run eval report using the latest folder and existing Docker image
+    logger.info(f"Running evaluation report using image from {latest_folder_name}")
+    process_eval_report(
+        test_spec=test_spec,
+        example=example,
+        parent_logger=logger,
+        trial_num=0,  # Use 0 as we're in debug mode
+        instance_id=instance_id,
+    )
+
+
 # Main execution
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="SWE-Bench environment builder")
     parser.add_argument(
-        "--debug",
+        "--debug_path",
         type=str,
-        help="Load results from a specific experiment timestamp (format: YYYYMMDD_HHMMSS)",
+        help="Path to a specific experiment directory to debug (format: exp_name/YYYYMMDD_HHMMSS/instance_id)",
     )
     parser.add_argument(
         "--num-processes",
@@ -575,45 +648,46 @@ if __name__ == "__main__":
         default="batchA",
         help="Name of the experiment",
     )
-    parser.add_argument(
-        "--print-to-stdout",
-        action="store_true",
-        help="Print logs to stdout in addition to files",
-    )
     args = parser.parse_args()
 
-    # Force single process mode when debug is enabled
-    if args.debug is not None and args.num_processes > 1:
+    # Force single process mode when debug_path is enabled
+    if args.debug_path is not None and args.num_processes > 1:
         print(
             f"Warning: Debug mode enabled. Setting num_processes to 1 (was {args.num_processes})."
         )
         args.num_processes = 1
 
-    # Load SWE-Bench dataset
-    swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
-    swe_bench = swe_bench.filter(lambda x: x["repo"] == "scikit-learn/scikit-learn").sort(  # type: ignore
-        "created_at"
-    )
-
-    # Determine the range of examples to process
-    end_idx = args.end_index if args.end_index is not None else len(swe_bench)
-    examples = [swe_bench[i] for i in range(args.start_index, end_idx)]
-
-    # Create a pool of workers
-    with ThreadPoolExecutor(max_workers=args.num_processes) as executor:
-        # Process examples in parallel
-        results = list(
-            executor.map(
-                lambda x: process_single_example(*x),
-                [(example, args.exp_name, args.debug) for example in examples],
-            )
+    if args.debug_path:
+        # In debug mode, just run the debug_example function
+        success = debug_example(args.debug_path)
+        print(f"Debug {'succeeded' if success else 'failed'}")
+    else:
+        # Normal processing mode - load dataset and process examples
+        # Load SWE-Bench dataset
+        swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
+        swe_bench = swe_bench.filter(lambda x: x["repo"] == "sympy/sympy").sort(  # type: ignore
+            "created_at"
         )
 
-    # Print summary of results
-    total = len(results)
-    successful = sum(1 for r in results if r)
-    print("\nProcessing complete!")
-    print(f"Total examples processed: {total}")
-    print(f"Successful: {successful}")
-    print(f"Failed: {total - successful}")
-    print(f"Success rate: {(successful/total)*100:.2f}%")
+        # Determine the range of examples to process
+        end_idx = args.end_index if args.end_index is not None else len(swe_bench)
+        examples = [swe_bench[i] for i in range(args.start_index, end_idx)]
+
+        # Create a pool of workers
+        with ThreadPoolExecutor(max_workers=args.num_processes) as executor:
+            # Process examples in parallel
+            results = list(
+                executor.map(
+                    lambda x: process_single_example(*x),
+                    [(example, args.exp_name, None) for example in examples],
+                )
+            )
+
+        # Print summary of results
+        total = len(results)
+        successful = sum(1 for r in results if r)
+        print("\nProcessing complete!")
+        print(f"Total examples processed: {total}")
+        print(f"Successful: {successful}")
+        print(f"Failed: {total - successful}")
+        print(f"Success rate: {(successful/total)*100:.2f}%")

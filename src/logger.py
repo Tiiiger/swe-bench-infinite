@@ -95,7 +95,6 @@ class CustomLogger(logging.Logger):
             log_dir = f"{base_dir}/{logger_name}"
 
         pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
-        print(f"Add a logger at {log_dir}")
         self.log_dir = log_dir
 
         # Configure log file

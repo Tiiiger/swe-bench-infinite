@@ -1,12 +1,13 @@
-import hashlib
 import logging
 import os
+import pathlib
 import shutil
 import subprocess
 import tarfile
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 from data_types import GitRepoData, RequirementsData
 
@@ -19,7 +20,6 @@ def write_docker_files(
     requirements_data: RequirementsData,
     git_data: GitRepoData,
     logger,
-    debug: bool = False,
 ) -> None:
     """
     Write Docker configuration files based on requirements data.
@@ -33,15 +33,6 @@ def write_docker_files(
     # Create directories
     os.makedirs("docker", exist_ok=True)
     log_subdir = logger.get_logdir()
-
-    # File paths in docker directory
-    docker_files = [
-        "conda_setup.sh",
-        "github_setup.sh",
-        "apt_install.sh",
-        "pip_install.sh",
-        "install_repo.sh",
-    ]
 
     # write to log_subdir first
     log_paths = {}
@@ -84,40 +75,34 @@ def write_docker_files(
     with open(log_install_path, "w") as f:
         f.write(requirements_data["install_commands"])
     log_paths["install_repo.sh"] = log_install_path
-
-    # In debug mode, copy all files to docker folder
-    # this is because we want to skip rebuilding docker image
-    if debug:
-        # Copy from logdir to docker folder only if content changed
-        # NOTE: this is because Docker also checks the timestamp of the file
-        # so if the content hasn't changed, we don't update these files to retrigger build
-        for filename in docker_files:
-            log_path = log_paths[filename]
-            docker_path = os.path.join("docker", filename)
-
-            # Compute hash of the new file in logdir
-            with open(log_path, "rb") as f:
-                new_content_hash = hashlib.md5(f.read()).hexdigest()
-
-            # Check if docker file exists and compute its hash
-            copy_needed = True
-            if os.path.exists(docker_path):
-                with open(docker_path, "rb") as f:
-                    existing_content_hash = hashlib.md5(f.read()).hexdigest()
-                if existing_content_hash == new_content_hash:
-                    copy_needed = False
-
-            # Copy only if content has changed
-            if copy_needed:
-                shutil.copy2(log_path, docker_path)
-                logger.info(f"Updated {filename} in docker folder with new content")
-            else:
-                logger.info(f"Skipped copying {filename} to docker folder (content unchanged)")
-    else:
-        # otherwise, copy docker file from docker folder to logdir
-        shutil.copy2("docker/Dockerfile.env", os.path.join(log_subdir, "Dockerfile.env"))
+    shutil.copy2("docker/Dockerfile.env", os.path.join(log_subdir, "Dockerfile.env"))
 
     logger.info(f"Docker configuration files written successfully to {log_subdir}")
+
+
+def remove_existing_image(tag: str, logger=None):
+    """
+    Remove existing Docker image with the specified tag.
+
+    Args:
+        tag (str): Tag of the image to remove
+        logger (logging.Logger, optional): Logger for tracking operations
+    """
+    client = docker.from_env()
+    try:
+        images = client.images.list(name=tag)
+        if images:
+            if logger:
+                logger.info(f"Removing existing image with tag: {tag}")
+            client.images.remove(tag, force=True)
+            if logger:
+                logger.info(f"Successfully removed image with tag: {tag}")
+        else:
+            if logger:
+                logger.info(f"No existing image found with tag: {tag}")
+    except Exception as e:
+        if logger:
+            logger.warning(f"Error removing image with tag {tag}: {str(e)}")
 
 
 def custom_build_docker_images(path: str, dockerfile: str, tag: str) -> subprocess.CompletedProcess:
@@ -168,7 +153,7 @@ def build_docker_images(
     logger: logging.Logger,
     build_name: str,
     instance_id: str,
-    debug: bool = False,
+    debug: Optional[str] = None,
 ):
     """
     Build Docker images for the testbed environment using the Docker Python API.
@@ -209,16 +194,21 @@ def build_docker_images(
     base_build_time = time.time() - start_time
     docker_build_logger.info(f"Base docker image build completed in {base_build_time:.2f} seconds")
 
+    # Remove any existing testbed image with this instance ID
+    docker_build_logger.info("Checking for existing testbed image")
+    remove_existing_image(f"{instance_id}.test:latest", docker_build_logger)
+
     # Build testbed image
     docker_build_logger.info("Building docker image (testbed)")
     start_time = time.time()
-    docker_path = "./docker" if debug else docker_build_logger.get_logdir()
-    if debug:
-        print("WARNING: Debug mode is on, using docker folder in current directory")
+    breakpoint()
+    if debug is None:
+        docker_path = docker_build_logger.get_logdir()
     else:
-        print(f"Using docker folder in {docker_path}")
+        docker_path = pathlib.Path(debug) / docker_build_logger.name
+    breakpoint()
     testbed_result = custom_build_docker_images(
-        path=docker_path,
+        path=str(docker_path),
         dockerfile="Dockerfile.env",
         tag=f"{instance_id}.test:latest",
     )

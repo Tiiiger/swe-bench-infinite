@@ -11,8 +11,10 @@ from github import Github
 
 from logger import setup_logger
 
+# These are cached here to avoid github api rate limiting
 GITHUB_URLS = {
     "scikit-learn/scikit-learn": "https://github.com/scikit-learn/scikit-learn",
+    "sympy/sympy": "https://github.com/sympy/sympy",
 }
 
 
@@ -108,6 +110,49 @@ def load_file_contents(
         raise
 
     return file_contents
+
+
+def generate_tree(directory, max_depth=2, current_depth=0, prefix=""):
+    """
+    Generate a directory tree representation similar to the Unix 'tree' command.
+
+    Args:
+        directory (str or Path): Directory to generate tree for
+        max_depth (int): Maximum depth of directories to display
+        current_depth (int): Current depth in the recursion
+        prefix (str): Prefix for the current line
+
+    Returns:
+        str or list: String representation of the tree at depth 0,
+                    or list of lines for recursive calls
+    """
+    directory_path = pathlib.Path(directory)
+    contents = list(directory_path.iterdir())
+    files = [item for item in contents if item.is_file()]
+    subdirs = [item for item in contents if item.is_dir()]
+
+    tree_output = []
+
+    for i, file in enumerate(sorted(files)):
+        tree_output.append(
+            f"{prefix}├── {file.name}"
+            if i < len(files) - 1 or subdirs
+            else f"{prefix}└── {file.name}"
+        )
+
+    if current_depth < max_depth:
+        for i, subdir in enumerate(sorted(subdirs)):
+            is_last = i == len(subdirs) - 1
+            tree_output.append(f"{prefix}{'└── ' if is_last else '├── '}{subdir.name}")
+            if current_depth < max_depth - 1:
+                extension = "    " if is_last else "│   "
+                tree_output.extend(
+                    generate_tree(subdir, max_depth, current_depth + 1, prefix + extension)
+                )
+
+    if current_depth == 0:
+        return "\n".join([directory_path.name] + tree_output)
+    return tree_output
 
 
 def clone_and_get_tree(
@@ -208,22 +253,20 @@ def clone_and_get_tree(
     commit_date = timestamp_result.stdout.strip()
     clone_logger.info(f"Commit date: {commit_date}")
 
-    # Get the repo tree
+    # Get the repo tree using the Python implementation
     clone_logger.info(f"Generating tree with depth {tree_depth}...")
-    tree_result = subprocess.run(
-        args=f"tree -L {tree_depth}", shell=True, capture_output=True, text=True, cwd=target_dir
-    )
-    if tree_result.stdout:
-        clone_logger.debug(f"Tree command stdout: {tree_result.stdout}")
-    if tree_result.stderr:
-        clone_logger.debug(f"Tree command stderr: {tree_result.stderr}")
+    tree_output = generate_tree(target_dir, max_depth=tree_depth)
+    # Ensure tree_output is always a string to match GitRepoData type
+    if isinstance(tree_output, list):
+        tree_output = "\n".join(tree_output)
+    clone_logger.debug(f"Tree output: {tree_output}")
 
     clone_logger.debug("Returning results")
 
     return {
         "commit_hash": commit,
         "commit_date": commit_date,
-        "tree_output": tree_result.stdout,
+        "tree_output": tree_output,
         "repo_url": repo_url,
     }
 

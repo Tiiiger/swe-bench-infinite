@@ -1,4 +1,4 @@
-# SWE Bench x1000
+# SWE Bench Infinite
 
 ## Development Setup
 
@@ -6,7 +6,7 @@ This project uses pre-commit hooks to ensure code quality:
 
 1. Install dependencies:
    ```
-   pip install -r requirements.txt
+   pip install -e .[dev]
    ```
 
 2. Install pre-commit hooks:
