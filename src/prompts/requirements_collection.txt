@@ -29,6 +29,7 @@ Here is the required output format:
 Here are more detailed instructions:
 1. For python version, identify the latest version of python mentioned in the files. For example, if the files mention python 3.8 and 3.10, you should choose 3.10.
 However, if the files only mention python >= 3.6, you should choose 3.6 and not any version above 3.6. This is because later versions of python may not be supported at the time of the commit and may not be backwards compatible.
+Unfortunately, due to the contraints in our underlying infrastructure, the minimum version of python we can support is 3.5. If you are installing a really really old repo, you'll have to try to make it work with at least 3.5.
 2. For apt packages, identify all the packages that need to be installed via apt-get install. We will install python via conda and you do not need to specify python or pip in the apt packages.
 3. For pip packages, there are a few scenarios:
    - Absolute version: if the files mention a specific version, use that version.

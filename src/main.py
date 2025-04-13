@@ -84,7 +84,6 @@ def process_requirements_collection(
         result (GitRepoData): Dictionary containing commit_hash and commit_date
         client (AnthropicClient): Client for making requests to Anthropic API
         logger (logging.Logger, optional): Parent logger for tracking operations
-        repo_url (str, optional): URL of the git repository
 
     Raises:
         AnthropicResponseError: If there's an issue with the Anthropic API response

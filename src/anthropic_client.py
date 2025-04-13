@@ -20,7 +20,7 @@ logger.propagate = False
 
 class AnthropicClient:
     def __init__(
-        self, max_retries: int = 5, initial_backoff: float = 1.0, max_backoff: float = 60.0
+        self, max_retries: int = 20, initial_backoff: float = 1.0, max_backoff: float = 60.0
     ):
         """
         Initialize Anthropic client with retry capabilities.

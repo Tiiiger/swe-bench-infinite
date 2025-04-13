@@ -11,6 +11,10 @@ from github import Github
 
 from logger import setup_logger
 
+GITHUB_URLS = {
+    "scikit-learn/scikit-learn": "https://github.com/scikit-learn/scikit-learn",
+}
+
 
 def get_repo_url(repo_name: str) -> str:
     """
@@ -25,6 +29,8 @@ def get_repo_url(repo_name: str) -> str:
     Raises:
         Exception: If the repository cannot be found
     """
+    if repo_name in GITHUB_URLS:
+        return GITHUB_URLS[repo_name]
     # Initialize the GitHub client with authentication token from environment variable
     github_token = os.environ.get("GITHUB_TOKEN")
     g = Github(github_token)

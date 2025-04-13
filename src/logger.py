@@ -39,6 +39,7 @@ class CustomLogger(logging.Logger):
 
     def setup(
         self,
+        logger_name,
         parent_logger=None,
         debug=False,
         instance_id=None,
@@ -91,7 +92,7 @@ class CustomLogger(logging.Logger):
         else:
             # Child logger uses parent's directory and adds its name as subfolder
             base_dir = parent_logger.get_logdir()
-            log_dir = f"{base_dir}/{self.name}"
+            log_dir = f"{base_dir}/{logger_name}"
 
         pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
         print(f"Add a logger at {log_dir}")
@@ -161,6 +162,7 @@ def setup_logger(
 
     if isinstance(logger, CustomLogger):
         return logger.setup(
+            logger_name=logger_name,
             parent_logger=parent_logger,
             debug=debug,
             instance_id=instance_id,

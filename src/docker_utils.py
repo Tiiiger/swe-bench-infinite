@@ -212,8 +212,13 @@ def build_docker_images(
     # Build testbed image
     docker_build_logger.info("Building docker image (testbed)")
     start_time = time.time()
+    docker_path = "./docker" if debug else docker_build_logger.get_logdir()
+    if debug:
+        print("WARNING: Debug mode is on, using docker folder in current directory")
+    else:
+        print(f"Using docker folder in {docker_path}")
     testbed_result = custom_build_docker_images(
-        path="./docker" if debug else docker_build_logger.get_logdir(),
+        path=docker_path,
         dockerfile="Dockerfile.env",
         tag=f"{instance_id}.test:latest",
     )
