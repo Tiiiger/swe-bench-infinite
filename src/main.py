@@ -638,7 +638,7 @@ if __name__ == "__main__":
     else:
         # Normal processing mode - load dataset and process examples
         # Load SWE-Bench dataset
-        swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench", split="test")
+        swe_bench = datasets.load_dataset("princeton-nlp/SWE-Bench_Lite", split="test")
         swe_bench = swe_bench.filter(lambda x: x["repo"] == "sympy/sympy").sort(  # type: ignore
             "created_at"
         )
