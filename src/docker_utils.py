@@ -197,12 +197,10 @@ def build_docker_images(
     # Build testbed image
     docker_build_logger.info("Building docker image (testbed)")
     start_time = time.time()
-    breakpoint()
     if debug is None:
         docker_path = docker_build_logger.get_logdir()
     else:
         docker_path = pathlib.Path(debug) / docker_build_logger.name
-    breakpoint()
     testbed_result = custom_build_docker_images(
         path=str(docker_path),
         dockerfile="Dockerfile.env",

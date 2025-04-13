@@ -16,7 +16,6 @@ from docker_utils import build_docker_images, copy_to_container, exec_run_with_t
 from exceptions import RequirementsError
 from experiment_utils import (
     find_docker_image,
-    find_latest_build_folder,
     load_example_data,
     save_example_data,
 )
@@ -267,7 +266,7 @@ def process_eval_report(
     example: Any,
     parent_logger: CustomLogger,
     trial_num: int,
-) -> subprocess.CompletedProcess:
+) -> tuple[subprocess.CompletedProcess, dict]:
     """
     Process the evaluation report by running tests and generating a report.
 
@@ -321,11 +320,6 @@ def process_eval_report(
     with open(Path(eval_report_logger.get_logdir()) / "test_output.log", "w") as f:
         f.write(test_output_log)
 
-    if exit_code != 0:
-        return subprocess.CompletedProcess(
-            args=[], returncode=exit_code, stdout=test_output_log, stderr=test_output_log
-        )
-
     report = get_eval_report(
         test_spec=test_spec,
         prediction={
@@ -339,7 +333,12 @@ def process_eval_report(
     with open(Path(eval_report_logger.get_logdir()) / "report.json", "w") as f:
         json.dump(report, f, indent=2)
 
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout=None, stderr=None)
+    return (
+        subprocess.CompletedProcess(
+            args=[], returncode=exit_code, stdout=test_output_log, stderr=test_output_log
+        ),
+        report,
+    )
 
 
 def process_single_example(
@@ -373,14 +372,11 @@ def process_single_example(
         logger.info(f"Saved example data to {example_path}")
 
         # Protect git cloning operation with a lock
-        print("Trying to get git lock")
         with git_lock:
-            print("Got git lock")
             git_data = clone_and_get_tree(
                 repo_name=example["repo"],  # type: ignore
                 commit=example["base_commit"],  # type: ignore
                 logger=logger,
-                instance_id=example["instance_id"],
             )
 
         if debug:
@@ -491,14 +487,23 @@ def process_single_example(
 
         success = False
         for num_eval_trial in range(3):
-            eval_report_result = process_eval_report(
+            eval_run_result, report = process_eval_report(
                 test_spec=test_spec,
                 example=example,
                 parent_logger=logger,
                 trial_num=num_eval_trial,
             )
 
-            if eval_report_result.returncode == 0:
+            # Note(tianyi)
+            # return code != 0 means
+            # 1. pytest has failed -> there are environment issues
+            # 2. pytest has failed -> there are tests that are not passing
+            #
+            # resolved == True means
+            # 1. all tests we expect to pass, have passed
+            #
+            # we only need to retry if there are environment issues
+            if eval_run_result.returncode == 0 or report["resolved"]:
                 logger.info(f"After retry eval trial {num_eval_trial}, eval completed successfully")
                 # copy the report.json from the eval_report_logger to the main logger
                 shutil.copy(
@@ -508,13 +513,13 @@ def process_single_example(
                 success = True
                 break
             else:
-                logger.error(f"Eval retry {num_eval_trial} failed: {eval_report_result.stderr}")
+                logger.error(f"Eval retry {num_eval_trial} failed: {eval_run_result.stderr}")
                 # retry test
                 process_retry_test(
                     file_contents=file_contents,
                     requirements_data=time_traveled_requirements,
                     git_data=git_data,
-                    error_message=eval_report_result.stderr,
+                    error_message=eval_run_result.stderr,
                     test_command=test_spec.eval_script,
                     trial_num=num_eval_trial,
                     parent_logger=logger,
@@ -569,27 +574,19 @@ def debug_example(
         logger.error(f"Specified debug directory does not exist: {debug_path}")
         return False
 
-    # Find the latest retry build or test folder
-    latest_folder = find_latest_build_folder(debug_path)
-    if latest_folder is None:
-        logger.error(f"No build or test folders found in {debug_path}")
-        return False
-
-    latest_folder_name, latest_folder_path = latest_folder
-    logger.info(f"Using latest folder: {latest_folder_name} at {latest_folder_path}")
-
     # Check if Docker image exists
     if not find_docker_image(instance_id, logger):
-        return False
+        raise ValueError(f"Docker image for {instance_id} not found")
 
     # Run eval report using the latest folder and existing Docker image
-    logger.info(f"Running evaluation report using image from {latest_folder_name}")
-    process_eval_report(
+    output = process_eval_report(
         test_spec=test_spec,
         example=example,
         parent_logger=logger,
         trial_num=0,  # Use 0 as we're in debug mode
     )
+
+    return output
 
 
 # Main execution

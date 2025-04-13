@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, TypedDict
+from typing import Dict, List, TypedDict
 
 
 class RequirementsData(TypedDict):
@@ -43,17 +43,9 @@ class SWEBenchExample(TypedDict):
         repo (str): Repository name in the format 'owner/repo'
         base_commit (str): Base commit hash
         patch (str): Git patch to apply for the fix
-        created_at (str, optional): Creation timestamp
-        issue_url (str, optional): URL to the GitHub issue
-        issue_title (str, optional): Title of the GitHub issue
-        issue_body (str, optional): Body content of the GitHub issue
     """
 
     instance_id: str
     repo: str
     base_commit: str
     patch: str
-    created_at: Optional[str]
-    issue_url: Optional[str]
-    issue_title: Optional[str]
-    issue_body: Optional[str]

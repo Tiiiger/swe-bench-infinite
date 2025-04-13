@@ -149,7 +149,6 @@ def clone_and_get_tree(
     repo_name: str,
     commit: str,
     logger: logging.Logger,
-    instance_id: str,
     tree_depth: int = 2,
 ) -> GitRepoData:
     """
@@ -169,9 +168,7 @@ def clone_and_get_tree(
         GitError: If any git operation fails
     """
     # Extract timestamp from parent logger
-    clone_logger = setup_logger(
-        logger_name="clone_and_get_tree", parent_logger=logger, instance_id=instance_id
-    )
+    clone_logger = setup_logger(logger_name="clone_and_get_tree", parent_logger=logger)
 
     # Create playground directory with absolute path
     playground_dir = pathlib.Path("playground").resolve()
@@ -321,7 +318,6 @@ class TestGitUtils(unittest.TestCase):
             "scikit-learn/scikit-learn",
             "HEAD",
             logger=logging.getLogger(__name__),
-            instance_id="test",
         )
 
         # Verify the result

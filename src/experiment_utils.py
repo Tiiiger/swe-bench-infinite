@@ -1,5 +1,5 @@
-import json
 import os
+import pickle
 from typing import Any, Dict, Optional, cast
 
 from data_types import SWEBenchExample
@@ -10,7 +10,7 @@ from logger import CustomLogger
 
 def save_example_data(example: Dict[str, Any], log_dir: str) -> str:
     """
-    Save SWE-Bench example data to a JSON file.
+    Save SWE-Bench example data to a pickle file.
 
     Args:
         example: The example to save
@@ -19,43 +19,31 @@ def save_example_data(example: Dict[str, Any], log_dir: str) -> str:
     Returns:
         Path to the saved example file
     """
-    example_path = os.path.join(log_dir, "example.json")
+    example_path = os.path.join(log_dir, "example.pkl")
 
-    # Extract only the needed fields
-    example_data: SWEBenchExample = {
-        "instance_id": example["instance_id"],
-        "repo": example["repo"],
-        "base_commit": example["base_commit"],
-        "patch": example.get("patch", ""),
-        "created_at": example.get("created_at", None),
-        "issue_url": example.get("issue_url", None),
-        "issue_title": example.get("issue_title", None),
-        "issue_body": example.get("issue_body", None),
-    }
-
-    with open(example_path, "w") as f:
-        json.dump(example_data, f, indent=2)
+    with open(example_path, "wb") as f:
+        pickle.dump(example, f)
 
     return example_path
 
 
 def load_example_data(debug_path: str) -> Optional[SWEBenchExample]:
     """
-    Load SWE-Bench example data from a JSON file.
+    Load SWE-Bench example data from a pickle file.
 
     Args:
-        debug_path: Path to the directory containing the example.json file
+        debug_path: Path to the directory containing the example.pkl file
 
     Returns:
         The loaded example data or None if the file doesn't exist
     """
-    example_path = os.path.join(debug_path, "example.json")
+    example_path = os.path.join(debug_path, "example.pkl")
     if not os.path.exists(example_path):
         print(f"Example data not found in debug path: {example_path}")
         return None
 
-    with open(example_path, "r") as f:
-        example = json.load(f)
+    with open(example_path, "rb") as f:
+        example = pickle.load(f)
 
     return cast(SWEBenchExample, example)
 
@@ -109,7 +97,7 @@ def find_docker_image(instance_id: str, logger: CustomLogger) -> bool:
     client = docker.from_env()
 
     # Try different possible image names
-    image_names = [f"{instance_id}.test", f"{instance_id}.test:latest", f"{instance_id}"]
+    image_names = [f"{instance_id}.test:latest"]
 
     for image_name in image_names:
         try:
