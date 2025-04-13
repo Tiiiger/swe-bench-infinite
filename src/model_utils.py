@@ -67,7 +67,7 @@ def anthropic_generate_json(
 
     # Extract JSON block using regex
     logger.info("Extracting JSON block from response...")
-    json_match = re.search(r"```json(.*)```", text_block, re.DOTALL)
+    json_match = re.search(r"```json(.*?)```", text_block, re.DOTALL)
     if not json_match:
         logger.error("Could not find JSON block in response")
         raise RequirementsError("Could not find JSON block in response")
@@ -80,6 +80,7 @@ def anthropic_generate_json(
         parsed_data = json.loads(json_block)
         logger.info("Successfully parsed JSON data")
     except json.JSONDecodeError as e:
+        breakpoint()
         logger.error(f"Error parsing JSON block: {e}")
         raise RequirementsError(f"Error parsing JSON block: {e}") from e
 

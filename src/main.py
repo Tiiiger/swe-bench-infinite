@@ -37,7 +37,7 @@ from model_utils import anthropic_generate_json
 git_lock = threading.Lock()
 
 
-def process_localization(result: GitRepoData, logger: CustomLogger, instance_id: str) -> list[str]:
+def process_localization(result: GitRepoData, logger: CustomLogger) -> list[str]:
     """
     Process the localization of requirements for a given commit.
 
@@ -54,9 +54,7 @@ def process_localization(result: GitRepoData, logger: CustomLogger, instance_id:
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    loc_logger = setup_logger(
-        logger_name="localization", parent_logger=logger, instance_id=instance_id
-    )
+    loc_logger = setup_logger(logger_name="localization", parent_logger=logger)
 
     # Localize requirements
     prompt = localize_requirements(
@@ -80,7 +78,6 @@ def process_requirements_collection(
     file_contents: Dict[str, str],
     result: GitRepoData,
     logger: CustomLogger,
-    instance_id: str,
 ) -> RequirementsData:
     """
     Process the collection of requirements and build the Docker environment.
@@ -96,9 +93,7 @@ def process_requirements_collection(
         RequirementsError: If there's an issue parsing the requirements
     """
     # Create specific logger for this function
-    req_logger = setup_logger(
-        logger_name="requirements_collection", parent_logger=logger, instance_id=instance_id
-    )
+    req_logger = setup_logger(logger_name="requirements_collection", parent_logger=logger)
 
     # Collect requirements
     prompt = collect_requirements(
@@ -132,7 +127,6 @@ def process_retry_build(
     git_data: GitRepoData,
     error_message: str,
     trial_num: int,
-    instance_id: str,
     parent_logger: CustomLogger,
 ) -> tuple[RequirementsData, subprocess.CompletedProcess]:
     """
@@ -150,9 +144,7 @@ def process_retry_build(
         tuple[RequirementsData, subprocess.CompletedProcess]: Updated requirements data and build output
     """
     build_retry_logger = setup_logger(
-        logger_name=f"retry_build_{trial_num}",
-        parent_logger=parent_logger,
-        instance_id=instance_id,
+        logger_name=f"retry_build_{trial_num}", parent_logger=parent_logger
     )
 
     prompt = retry_installation(
@@ -186,7 +178,6 @@ def process_retry_build(
             git_data=git_data,
             logger=build_retry_logger,
             build_name=f"retry_build_{trial_num}",
-            instance_id=instance_id,
         )
 
         return time_traveled_requirements, build_output
@@ -204,7 +195,6 @@ def process_retry_test(
     error_message: str,
     test_command: str,
     trial_num: int,
-    instance_id: str,
     parent_logger: CustomLogger,
 ) -> subprocess.CompletedProcess:
     """
@@ -223,9 +213,7 @@ def process_retry_test(
         tuple[RequirementsData, subprocess.CompletedProcess]: Updated requirements data and test output
     """
     test_retry_logger = setup_logger(
-        logger_name=f"retry_test_{trial_num}",
-        parent_logger=parent_logger,
-        instance_id=instance_id,
+        logger_name=f"retry_test_{trial_num}", parent_logger=parent_logger
     )
 
     prompt = retry_test(
@@ -260,7 +248,6 @@ def process_retry_test(
             git_data=git_data,
             logger=test_retry_logger,
             build_name=f"retry_test_{trial_num}",
-            instance_id=instance_id,
         )
         if build_output.returncode != 0:
             raise ValueError(
@@ -280,7 +267,6 @@ def process_eval_report(
     example: Any,
     parent_logger: CustomLogger,
     trial_num: int,
-    instance_id: str,
 ) -> subprocess.CompletedProcess:
     """
     Process the evaluation report by running tests and generating a report.
@@ -296,10 +282,9 @@ def process_eval_report(
     """
     # setup a separate logger for eval report
     eval_report_logger = setup_logger(
-        logger_name=f"eval_report_{trial_num}",
-        parent_logger=parent_logger,
-        instance_id=instance_id,
+        logger_name=f"eval_report_{trial_num}", parent_logger=parent_logger
     )
+    instance_id = eval_report_logger.get_instance_id()
 
     # Run the test in a Docker container
     # Create and start container
@@ -443,7 +428,6 @@ def process_single_example(
             file_paths = process_localization(
                 result=git_data,
                 logger=logger,
-                instance_id=example["instance_id"],
             )
 
             # Load file contents
@@ -460,7 +444,6 @@ def process_single_example(
                 file_contents=file_contents,
                 result=git_data,
                 logger=logger,
-                instance_id=example["instance_id"],
             )
 
         # Write Docker configuration files
@@ -473,8 +456,6 @@ def process_single_example(
             git_data=git_data,
             logger=logger,
             build_name="first_build",
-            instance_id=example["instance_id"],
-            debug=None,  # Set debug to None, we use debug_path now
         )
 
         # Check if Docker build was successful
@@ -491,7 +472,6 @@ def process_single_example(
                     git_data=git_data,
                     error_message=build_output.stderr,
                     trial_num=num_trial,
-                    instance_id=example["instance_id"],
                     parent_logger=logger,
                 )
                 if build_output.returncode == 0:
@@ -516,7 +496,6 @@ def process_single_example(
                 example=example,
                 parent_logger=logger,
                 trial_num=num_eval_trial,
-                instance_id=example["instance_id"],
             )
 
             if eval_report_result.returncode == 0:
@@ -538,7 +517,6 @@ def process_single_example(
                     error_message=eval_report_result.stderr,
                     test_command=test_spec.eval_script,
                     trial_num=num_eval_trial,
-                    instance_id=example["instance_id"],
                     parent_logger=logger,
                 )
 
@@ -611,7 +589,6 @@ def debug_example(
         example=example,
         parent_logger=logger,
         trial_num=0,  # Use 0 as we're in debug mode
-        instance_id=instance_id,
     )
 
 

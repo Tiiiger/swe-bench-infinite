@@ -1,4 +1,3 @@
-import logging
 import os
 import pathlib
 import shutil
@@ -13,7 +12,7 @@ from data_types import GitRepoData, RequirementsData
 
 import docker
 from docker.models.containers import Container
-from logger import setup_logger
+from logger import CustomLogger, setup_logger
 
 
 def write_docker_files(
@@ -150,9 +149,8 @@ def custom_build_docker_images(path: str, dockerfile: str, tag: str) -> subproce
 def build_docker_images(
     requirements_data: RequirementsData,
     git_data: GitRepoData,
-    logger: logging.Logger,
+    logger: CustomLogger,
     build_name: str,
-    instance_id: str,
     debug: Optional[str] = None,
 ):
     """
@@ -168,10 +166,8 @@ def build_docker_images(
     docker.from_env()  # type: ignore[attr-defined]
 
     # add a child logger for docker build logs
-    docker_build_logger = setup_logger(
-        instance_id=instance_id, logger_name=f"docker_{build_name}", parent_logger=logger
-    )
-
+    docker_build_logger = setup_logger(logger_name=f"docker_{build_name}", parent_logger=logger)
+    instance_id = docker_build_logger.get_instance_id()
     # write docker files
     write_docker_files(requirements_data, git_data, docker_build_logger)
 

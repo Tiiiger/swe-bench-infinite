@@ -43,16 +43,6 @@ def get_repo_url(repo_name: str) -> str:
     return repo.html_url
 
 
-# Example usage
-if __name__ == "__main__":
-    repo_name = "scikit-learn/scikit-learn"
-    try:
-        repo_url = get_repo_url(repo_name)
-        print(f"Repository URL: {repo_url}")
-    except Exception as e:
-        print(e)
-
-
 def load_file_contents(
     git_data: GitRepoData,
     file_paths: List[str],

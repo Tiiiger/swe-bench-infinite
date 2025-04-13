@@ -138,8 +138,8 @@ logging.setLoggerClass(CustomLogger)
 
 
 def setup_logger(
-    instance_id,
     logger_name="main",
+    instance_id=None,
     parent_logger=None,
     debug=False,
     root_dir="exps",
@@ -157,6 +157,16 @@ def setup_logger(
     Returns:
         CustomLogger: Configured logger instance
     """
+    # Inherit instance_id from parent_logger if provided and instance_id is a CustomLogger
+    if parent_logger is not None and isinstance(parent_logger, CustomLogger):
+        inherited_instance_id = parent_logger.get_instance_id()
+        if instance_id is None:
+            instance_id = inherited_instance_id
+
+    # Ensure instance_id is not None when parent_logger is None
+    if parent_logger is None and instance_id is None:
+        raise ValueError("instance_id is required when parent_logger is None")
+
     logger = logging.getLogger(f"{logger_name}_{instance_id}")
 
     if isinstance(logger, CustomLogger):
