@@ -255,6 +255,7 @@ def clone_and_get_tree(
         "commit_date": commit_date,
         "tree_output": tree_output,
         "repo_url": repo_url,
+        "repo_name": repo_name,
     }
 
 

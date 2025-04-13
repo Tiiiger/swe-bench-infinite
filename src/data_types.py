@@ -32,6 +32,7 @@ class GitRepoData(TypedDict):
     commit_date: str
     tree_output: str
     repo_url: str
+    repo_name: str
 
 
 class SWEBenchExample(TypedDict):

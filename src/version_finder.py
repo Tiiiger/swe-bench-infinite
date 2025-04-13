@@ -1,6 +1,7 @@
 # https://pypi.org/project/numpy/#history
 # https://pypi.org/project/pandas/#history
 # https://pypi.org/project/scikit-learn/#history
+import threading
 import time
 import unittest
 from collections import OrderedDict
@@ -18,6 +19,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from logger import CustomLogger
+
+# Selenium is not thread safe, so we need to use a lock to ensure that only one thread can use it at a time
+selenium_lock = threading.Lock()
 
 
 def get_versions_with_requests(package_name):
@@ -57,59 +61,61 @@ def get_versions_with_requests(package_name):
 
 def get_versions_with_selenium(package_name):
     """Get package version history using Selenium."""
-    # Set up headless Firefox browser
-    firefox_options = Options()
-    firefox_options.add_argument("--headless")
+    # Acquire the selenium lock to ensure thread safety
+    with selenium_lock:
+        # Set up headless Firefox browser
+        firefox_options = Options()
+        firefox_options.add_argument("--headless")
 
-    # Initialize the Firefox driver
-    driver = webdriver.Firefox(options=firefox_options)
+        # Initialize the Firefox driver
+        driver = webdriver.Firefox(options=firefox_options)
 
-    try:
-        # Navigate to the package history page
-        url = f"https://pypi.org/project/{package_name}/#history"
-        driver.get(url)
+        try:
+            # Navigate to the package history page
+            url = f"https://pypi.org/project/{package_name}/#history"
+            driver.get(url)
 
-        # Wait for the history section to load
-        WebDriverWait(driver, 2).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "release__card"))
-        )
+            # Wait for the history section to load
+            WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "release__card"))
+            )
 
-        # Allow time for JavaScript to fully render the page
-        time.sleep(0.1)
+            # Allow time for JavaScript to fully render the page
+            time.sleep(0.1)
 
-        # Parse the page content
-        version_to_date = OrderedDict()
-        release_cards = driver.find_elements(By.CLASS_NAME, "release__card")
+            # Parse the page content
+            version_to_date = OrderedDict()
+            release_cards = driver.find_elements(By.CLASS_NAME, "release__card")
 
-        for card in release_cards:
-            try:
-                version_element = card.find_element(By.CLASS_NAME, "release__version")
-                version_number = version_element.text.strip().split("\n")[0]
+            for card in release_cards:
+                try:
+                    version_element = card.find_element(By.CLASS_NAME, "release__version")
+                    version_number = version_element.text.strip().split("\n")[0]
 
-                version_date = card.find_element(
-                    By.CLASS_NAME, "release__version-date"
-                ).find_element(By.TAG_NAME, "time")
-                datetime_attr = version_date.get_attribute("datetime")
+                    version_date = card.find_element(
+                        By.CLASS_NAME, "release__version-date"
+                    ).find_element(By.TAG_NAME, "time")
+                    datetime_attr = version_date.get_attribute("datetime")
 
-                if datetime_attr:
-                    # Convert datetime string to timestamp when saving
-                    timestamp = datetime.fromisoformat(
-                        datetime_attr.replace("Z", "+00:00")
-                    ).timestamp()
-                    version_to_date[version_number] = timestamp
-                else:
-                    print(f"No date found for {version_number}")
-            except Exception as e:
-                print(f"Error processing version: {e}")
+                    if datetime_attr:
+                        # Convert datetime string to timestamp when saving
+                        timestamp = datetime.fromisoformat(
+                            datetime_attr.replace("Z", "+00:00")
+                        ).timestamp()
+                        version_to_date[version_number] = timestamp
+                    else:
+                        print(f"No date found for {version_number}")
+                except Exception as e:
+                    print(f"Error processing version: {e}")
 
-        # make sure the dates are sorted
-        version_to_date = OrderedDict(sorted(version_to_date.items(), key=lambda x: x[1]))
+            # make sure the dates are sorted
+            version_to_date = OrderedDict(sorted(version_to_date.items(), key=lambda x: x[1]))
 
-        return version_to_date
+            return version_to_date
 
-    finally:
-        # Always close the browser
-        driver.quit()
+        finally:
+            # Always close the browser
+            driver.quit()
 
 
 def get_versions(package_name):
@@ -248,6 +254,20 @@ class TestVersionFinder(unittest.TestCase):
     def test_attrs(self):
         version = check_and_replace_version("attrs", "25.3.0", "2019-01-01")
         self.assertEqual(version, "18.2.0")
+
+    def test_get_versions_with_requests(self):
+        # Test the requests-based version fetcher with a popular package
+        versions = get_versions_with_requests("requests")
+        self.assertIsNotNone(versions)
+
+    def test_get_versions_with_selenium(self):
+        # Test the selenium-based version fetcher with a popular package
+        versions = get_versions_with_selenium("flask")
+        self.assertIsNotNone(versions)
+        self.assertGreater(len(versions), 0)
+        # Check that versions are ordered by timestamp
+        timestamps = list(versions.values())
+        self.assertEqual(timestamps, sorted(timestamps))
 
 
 if __name__ == "__main__":

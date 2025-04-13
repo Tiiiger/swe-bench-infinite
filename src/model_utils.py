@@ -80,7 +80,6 @@ def anthropic_generate_json(
         parsed_data = json.loads(json_block)
         logger.info("Successfully parsed JSON data")
     except json.JSONDecodeError as e:
-        breakpoint()
         logger.error(f"Error parsing JSON block: {e}")
         raise RequirementsError(f"Error parsing JSON block: {e}") from e
 

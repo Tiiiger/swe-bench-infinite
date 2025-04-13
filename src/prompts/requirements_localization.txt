@@ -1,4 +1,4 @@
-You are a software engineer trying to install a development environment for the open source project scikit-learn.
+You are a software engineer trying to install a development environment for the open source project {repo_name}.
 Specifically, you are trying to run test on commit {commit_hash}, which is a commit from {commit_date}.
 
 It is tricky to install the development environment from before, so your first step is to identify all the files that could

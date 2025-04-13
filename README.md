@@ -4,6 +4,12 @@
 
 This project uses pre-commit hooks to ensure code quality:
 
+0. Install
+```
+firefox
+geckodriver
+```
+
 1. Install dependencies:
    ```
    pip install -e .[dev]

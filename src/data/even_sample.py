@@ -68,7 +68,7 @@ def generate_distribution_report(
 
 def get_even_sample_dataset(
     target_total: int = 300,
-    min_repo_samples: int = 10,
+    min_repo_samples: int = 25,
     verbose: bool = True,
     cache: bool = True,
     cache_path: Optional[str] = None,
@@ -96,9 +96,7 @@ def get_even_sample_dataset(
         cache_path = os.path.join(os.path.dirname(__file__), "sampled_dataset.json")
 
     # Check if cached dataset exists
-    if cache and os.path.exists(cache_path):
-        if verbose:
-            print(f"Loading cached dataset from {cache_path}")
+    if cache and not verbose and os.path.exists(cache_path):
         with open(cache_path, "r") as f:
             return json.load(f)
 
@@ -164,36 +162,65 @@ def get_even_sample_dataset(
     repo_allocation = {}
     remaining_target = target_total
 
-    # First pass: Ensure minimum samples per repository
-    # Make sure we don't exceed actual available samples
+    # First pass: For repos with fewer samples than min_repo_samples, take all available
     for repo, count in repo_counter.items():
-        repo_allocation[repo] = min(min_repo_samples, count)
-        remaining_target -= repo_allocation[repo]
+        if count <= min_repo_samples:
+            # For small repos, take all available samples
+            repo_allocation[repo] = count
+            remaining_target -= count
+        else:
+            # Initialize larger repos with zero for now
+            repo_allocation[repo] = 0
 
-    # If we have samples left to allocate, distribute proportionally among repos
-    # with more than min_repo_samples items
-    if remaining_target > 0:
-        total_remaining_items = sum(
-            max(0, count - min_repo_samples) for count in repo_counter.values()
+    # Second pass: Ensure minimum samples or available samples for larger repositories
+    # and distribute remaining proportionally
+    total_larger_repos = sum(1 for count in repo_counter.values() if count > min_repo_samples)
+
+    if total_larger_repos > 0:
+        # Calculate baseline allocation for larger repos
+        baseline_larger = (
+            min(min_repo_samples, remaining_target // total_larger_repos)
+            if total_larger_repos > 0
+            else 0
         )
-        if total_remaining_items > 0:
-            for repo, count in repo_counter.items():
-                if count > min_repo_samples:
-                    # Calculate extra samples proportionally
-                    extra_proportion = (count - min_repo_samples) / total_remaining_items
-                    extra_samples = int(extra_proportion * remaining_target)
-                    repo_allocation[repo] += extra_samples
 
-    # Adjust to ensure we hit target_total as closely as possible
-    total_allocated = sum(repo_allocation.values())
-    if total_allocated < target_total:
-        # Distribute remaining samples to larger repositories
-        remaining = target_total - total_allocated
-        for repo in sorted(repo_counter.keys(), key=lambda r: repo_counter[r], reverse=True):
-            if repo_allocation[repo] < repo_counter[repo] and remaining > 0:
-                repo_allocation[repo] += 1
-                remaining -= 1
-            if remaining == 0:
+        # Allocate baseline to each larger repo
+        for repo, count in repo_counter.items():
+            if count > min_repo_samples:
+                repo_allocation[repo] = min(baseline_larger, count)
+                remaining_target -= repo_allocation[repo]
+
+        # Third pass: Distribute any remaining samples proportionally among larger repos
+        if remaining_target > 0:
+            # Calculate total remaining capacity in larger repos
+            total_remaining_capacity = sum(
+                max(0, count - repo_allocation[repo])
+                for repo, count in repo_counter.items()
+                if count > min_repo_samples
+            )
+
+            if total_remaining_capacity > 0:
+                for repo, count in repo_counter.items():
+                    if count > min_repo_samples and count > repo_allocation[repo]:
+                        # Calculate proportional extra allocation
+                        extra_capacity = count - repo_allocation[repo]
+                        proportion = extra_capacity / total_remaining_capacity
+                        extra_allocation = min(int(proportion * remaining_target), extra_capacity)
+
+                        repo_allocation[repo] += extra_allocation
+                        remaining_target -= extra_allocation
+
+    # Final pass: If we still have remaining samples, add them one by one to repos that can take more
+    if remaining_target > 0:
+        for repo in sorted(
+            repo_counter.keys(), key=lambda r: repo_counter[r] - repo_allocation[r], reverse=True
+        ):
+            available_capacity = repo_counter[repo] - repo_allocation[repo]
+            if available_capacity > 0 and remaining_target > 0:
+                extra = min(available_capacity, remaining_target)
+                repo_allocation[repo] += extra
+                remaining_target -= extra
+            if remaining_target == 0:
                 break
 
     if verbose:
@@ -208,38 +235,60 @@ def get_even_sample_dataset(
 
     # Sample from each repository according to its allocation
     sampled_items = []
+    actual_repo_samples = {}  # Track how many samples we actually take per repo
 
     for repo, allocation in repo_allocation.items():
         if allocation <= 0:
             continue
 
+        # Special case: For repos with fewer samples than min_repo_samples, take ALL samples
+        if repo_counter[repo] <= min_repo_samples:
+            repo_samples = []
+            for quarter in repo_quarter_counter[repo].keys():
+                available_items = repo_quarter_items[repo][quarter]
+                repo_samples.extend(available_items)  # Take all samples from this quarter
+
+            sampled_items.extend(repo_samples)
+            actual_repo_samples[repo] = len(repo_samples)
+            continue  # Skip the normal quarter-based allocation for these small repos
+
+        # Regular case: For larger repos, distribute across quarters
         # Get all available quarters for this repo
         available_quarters = sorted(repo_quarter_counter[repo].keys())
         if not available_quarters:
             continue
 
         # Calculate how many samples to take from each quarter
-        # Try to distribute evenly across quarters
+        # Try to distribute evenly across quarters without using ceil to avoid oversampling
         quarter_allocations = {}
-        samples_per_quarter = max(1, allocation // len(available_quarters))
-        remainder = allocation - (samples_per_quarter * len(available_quarters))
+        samples_per_quarter = allocation / len(
+            available_quarters
+        )  # Use float division instead of ceiling
 
+        # First pass: Allocate integer portion to each quarter
+        base_per_quarter = int(samples_per_quarter)
+        remainder = allocation - (base_per_quarter * len(available_quarters))
+
+        # Allocate base amount to each quarter
         for quarter in available_quarters:
             quarter_allocations[quarter] = min(
-                samples_per_quarter, repo_quarter_counter[repo][quarter]
+                base_per_quarter, repo_quarter_counter[repo][quarter]
             )
 
-        # Distribute any remainder to quarters with more samples
+        # Distribute remainder to quarters with more samples, one at a time
         if remainder > 0:
-            for quarter in sorted(
-                available_quarters, key=lambda q: repo_quarter_counter[repo][q], reverse=True
+            # Sort quarters by available samples (more samples first)
+            for quarter_i in sorted(
+                available_quarters,
+                key=lambda q: repo_quarter_counter[repo][q] - quarter_allocations[q],
+                reverse=True,
             ):
-                extra = min(
-                    remainder, repo_quarter_counter[repo][quarter] - quarter_allocations[quarter]
-                )
-                if extra > 0:
-                    quarter_allocations[quarter] += extra
-                    remainder -= extra
+                if (
+                    quarter_allocations[quarter_i] < repo_quarter_counter[repo][quarter_i]
+                    and remainder > 0
+                ):
+                    quarter_allocations[quarter_i] += 1
+                    remainder -= 1
                 if remainder == 0:
                     break
 
@@ -256,6 +305,63 @@ def get_even_sample_dataset(
                 repo_samples.extend(sample)
 
         sampled_items.extend(repo_samples)
+        actual_repo_samples[repo] = len(repo_samples)
+
+    # Final adjustment to ensure we don't exceed target_total
+    if len(sampled_items) > target_total:
+        # Calculate how many samples to remove
+        excess = len(sampled_items) - target_total
+
+        # Create a priority list for removing samples, focusing on repos with most samples first
+        # But don't reduce any repo below min_repo_samples unless absolutely necessary
+        removal_candidates = []
+        for repo, count in sorted(actual_repo_samples.items(), key=lambda x: x[1], reverse=True):
+            # Only consider repos with more than minimum samples
+            if count > min_repo_samples:
+                eligible_to_remove = count - min_repo_samples
+                removal_candidates.append((repo, eligible_to_remove))
+
+        # If we still need to remove more after considering eligible repos
+        if sum(eligible for _, eligible in removal_candidates) < excess:
+            # Also consider repos at minimum samples if absolutely necessary
+            for repo, count in sorted(
+                actual_repo_samples.items(), key=lambda x: x[1], reverse=True
+            ):
+                if count <= min_repo_samples and count > 1:  # Ensure at least 1 sample remains
+                    removal_candidates.append((repo, count - 1))
+
+        # Remove samples based on priority list
+        to_remove = excess
+        indices_to_remove = []
+
+        # Create a map of samples by repo for easier removal
+        samples_by_repo: Dict[str, List[int]] = {repo: [] for repo in actual_repo_samples}
+        for i, item in enumerate(sampled_items):
+            samples_by_repo[item["repo"]].append(i)
+
+        # Remove samples from each repo according to our priority
+        for repo, eligible in removal_candidates:
+            if to_remove <= 0:
+                break
+
+            # Calculate how many to remove from this repo
+            remove_from_repo = min(eligible, to_remove)
+            if remove_from_repo <= 0:
+                continue
+
+            # Select indices to remove
+            repo_indices = samples_by_repo[repo]
+            selected_indices = random.sample(repo_indices, remove_from_repo)
+            indices_to_remove.extend(selected_indices)
+
+            to_remove -= remove_from_repo
+
+        # Sort indices in descending order to avoid shifting problems
+        indices_to_remove.sort(reverse=True)
+
+        # Remove the selected samples
+        for idx in indices_to_remove:
+            sampled_items.pop(idx)
 
     if verbose:
         print(f"Total sampled items: {len(sampled_items)}")
@@ -292,6 +398,6 @@ def get_even_sample_dataset(
 if __name__ == "__main__":
     print("\n--- Creating Evenly Sampled Dataset (Target: 300 samples) ---")
     sampled_dataset = get_even_sample_dataset(
-        target_total=300, min_repo_samples=10, verbose=True, cache=True
+        target_total=300, min_repo_samples=25, verbose=True, cache=True
     )
     print(f"\nFinal sample size: {len(sampled_dataset)} items")
