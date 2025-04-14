@@ -76,7 +76,7 @@ def get_versions_with_selenium(package_name):
             driver.get(url)
 
             # Wait for the history section to load
-            WebDriverWait(driver, 2).until(
+            WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "release__card"))
             )
 
@@ -112,6 +112,8 @@ def get_versions_with_selenium(package_name):
             version_to_date = OrderedDict(sorted(version_to_date.items(), key=lambda x: x[1]))
 
             return version_to_date
+        except Exception:
+            return None
 
         finally:
             # Always close the browser
@@ -138,7 +140,7 @@ def get_versions(package_name):
 
     # If both failed, raise error
     if versions is None or len(versions) == 0:
-        raise ValueError(f"Failed to get versions for {package_name}")
+        return {}
 
     return versions
 
@@ -158,7 +160,7 @@ def check_and_replace_version(package_name, version, timestamp):
         return version
 
 
-def get_version_at_time(package_name, timestamp):
+def get_version_at_time(package_name, timestamp) -> str:
     """
     Find the version of a package at a given timestamp.
 
@@ -178,9 +180,9 @@ def get_version_at_time(package_name, timestamp):
     # that was released after our target timestamp and return the previous one
     prev_version = None
     for version, ts in versions.items():
+        prev_version = version
         if ts > timestamp:
             return prev_version
-        prev_version = version
 
     if prev_version is None:
         raise ValueError(f"No version found for {package_name} at {timestamp}")
@@ -222,13 +224,18 @@ def time_travel_requirements(
             updated_version = version[2:]
         elif version.startswith(">=") or version == "":
             # Find the appropriate version at the commit date
-            updated_version = get_version_at_time(package_name=package, timestamp=commit_date)
-            if logger:
+            try:
+                updated_version = get_version_at_time(package_name=package, timestamp=commit_date)
                 logger.info(
                     f"Updated {package} version to {updated_version} for date {commit_date}"
                 )
+            except Exception:
+                # if we cannot find a version, we should just use the original version
+                updated_version = ""
+                logger.warning(
+                    f"Failed to find version for {package} at {commit_date}, using original version: {version}"
+                )
         else:
-            # Keep the version as is
             updated_version = version
 
         pip_packages[package] = updated_version
