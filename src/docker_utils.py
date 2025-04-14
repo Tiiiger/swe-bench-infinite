@@ -66,7 +66,10 @@ def write_docker_files(
         f.write("#!/bin/bash\n")
         f.write("mamba activate testbed\n")
         for package, version in requirements_data["pip_packages"].items():
-            f.write(f"pip install {package}=={version}\n")
+            if version == "":
+                f.write(f"pip install {package}\n")
+            else:
+                f.write(f"pip install {package}=={version}\n")
     log_paths["pip_install.sh"] = log_pip_path
 
     # write install_repo.sh to logdir

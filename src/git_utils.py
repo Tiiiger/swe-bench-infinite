@@ -2,6 +2,7 @@ import logging
 import os
 import pathlib
 import subprocess
+import sys
 import unittest
 from typing import Dict, List, Optional
 
@@ -15,6 +16,7 @@ from logger import setup_logger
 GITHUB_URLS = {
     "scikit-learn/scikit-learn": "https://github.com/scikit-learn/scikit-learn",
     "sympy/sympy": "https://github.com/sympy/sympy",
+    "pytest-dev/pytest": "https://github.com/pytest-dev/pytest",
 }
 
 
@@ -242,7 +244,9 @@ def clone_and_get_tree(
 
     # Get the repo tree using the Python implementation
     clone_logger.info(f"Generating tree with depth {tree_depth}...")
-    tree_output = generate_tree(target_dir, max_depth=tree_depth)
+    # Note(tianyi): I have experimented with setting the depth but there doesn't seem to be a good default
+    # So now I am setting this to infinite depth
+    tree_output = generate_tree(target_dir, max_depth=sys.maxsize)
     # Ensure tree_output is always a string to match GitRepoData type
     if isinstance(tree_output, list):
         tree_output = "\n".join(tree_output)
