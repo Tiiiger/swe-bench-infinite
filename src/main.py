@@ -29,8 +29,16 @@ from version_finder import time_travel_requirements
 
 from logger import setup_logger
 
-# Create a global lock for git operations
+# NOTE(tianyi)
+# Our git operations are based on the host machine file system
+# This is the save the time wasted on repeated downloading git repos for each instance
+# For multi-threaded runs, we need to ensure the git operations are thread safe
 git_lock = threading.Lock()
+
+# NOTE(tianyi)
+# Tests that involve network requests do not work well in concurrent runs
+# This is a simple lock to ensure only one test is running at a time
+test_lock = threading.Lock()
 
 
 def cleanup_docker_image(instance_id: str, logger):
@@ -48,6 +56,7 @@ def process_single_example(
     exp_name: str,
     debug: Optional[str] = None,
     clean_up: bool = False,
+    use_test_lock: bool = False,
 ) -> str:
     """
     Process a single example from SWE-Bench.
@@ -57,7 +66,7 @@ def process_single_example(
         exp_name: Name of the experiment
         debug: Optional debug experiment timestamp (deprecated, kept for backward compatibility)
         clean_up: Whether to clean up Docker images after processing
-
+        use_test_lock: Whether to use test lock to ensure only one test is running at a time
     Returns:
         str: Status of processing ("SUCCESS", "FAILURE", "EXCEPTION", etc.)
     """
@@ -152,12 +161,23 @@ def process_single_example(
             logger.info("Instance Docker build completed successfully")
 
         for num_eval_trial in range(3):
-            eval_run_result, report = process_eval_report(
-                test_spec=test_spec,
-                example=example,
-                parent_logger=logger,
-                trial_num=num_eval_trial,
-            )
+            if use_test_lock:
+                print("Grabbing test lock")
+                with test_lock:
+                    print("Got test lock")
+                    eval_run_result, report = process_eval_report(
+                        test_spec=test_spec,
+                        example=example,
+                        parent_logger=logger,
+                        trial_num=num_eval_trial,
+                    )
+            else:
+                eval_run_result, report = process_eval_report(
+                    test_spec=test_spec,
+                    example=example,
+                    parent_logger=logger,
+                    trial_num=num_eval_trial,
+                )
 
             # Note(tianyi)
             # return code != 0 means
@@ -274,7 +294,7 @@ def debug_example(
 
 
 def process_examples_with_timeout(
-    examples, exp_name, num_processes, timeout_seconds=3600, clean_up=False
+    examples, exp_name, num_processes, timeout_seconds=3600, clean_up=False, use_test_lock=False
 ):
     """
     Process multiple examples with a timeout for each task.
@@ -290,7 +310,9 @@ def process_examples_with_timeout(
         list: Results of processing each example (status strings)
     """
 
-    def process_with_timeout(example, exp_name, clean_up, timeout_seconds=3600):
+    def process_with_timeout(
+        example, exp_name, clean_up, timeout_seconds=3600, use_test_lock=False
+    ):
         """Wrapper that processes an example with timeout handling"""
         # Set up logger for this task
         logger = setup_logger(
@@ -304,7 +326,7 @@ def process_examples_with_timeout(
         def execution_target():
             try:
                 # Store the actual result if processing completes before timeout
-                result[0] = process_single_example(example, exp_name, None, clean_up)
+                result[0] = process_single_example(example, exp_name, None, clean_up, use_test_lock)
             except Exception as exc:
                 logger.error(f"Processing generated an exception: {exc}")
                 logger.error(f"Stack trace:\n{traceback.format_exc()}")
@@ -335,7 +357,9 @@ def process_examples_with_timeout(
         # Use map to process all examples and collect results
         results = list(
             executor.map(
-                lambda example: process_with_timeout(example, exp_name, clean_up, timeout_seconds),
+                lambda example: process_with_timeout(
+                    example, exp_name, clean_up, timeout_seconds, use_test_lock
+                ),
                 examples,
             )
         )
@@ -387,6 +411,11 @@ if __name__ == "__main__":
         default=None,
         help="Filter examples by repository (e.g., 'django/django')",
     )
+    parser.add_argument(
+        "--use-test-lock",
+        action="store_true",
+        help="Use test lock to ensure only one test is running at a time",
+    )
 
     args = parser.parse_args()
 
@@ -420,7 +449,12 @@ if __name__ == "__main__":
         # Process examples with timeout
         timeout_seconds = 30 * 60  # half an hour timeout per task
         results = process_examples_with_timeout(
-            examples, args.exp_name, args.num_processes, timeout_seconds, args.clean_up
+            examples,
+            args.exp_name,
+            args.num_processes,
+            timeout_seconds,
+            args.clean_up,
+            args.use_test_lock,
         )
 
         # Print summary of results
