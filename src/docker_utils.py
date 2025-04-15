@@ -56,7 +56,7 @@ def write_docker_files(
     log_apt_path = os.path.join(log_subdir, "apt_install.sh")
     with open(log_apt_path, "w") as f:
         f.write(
-            f"apt-get update && apt-get install -y {' '.join(requirements_data['apt_packages'])}\n"
+            f"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {' '.join(requirements_data['apt_packages'])}\n"
         )
     log_paths["apt_install.sh"] = log_apt_path
 

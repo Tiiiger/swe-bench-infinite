@@ -4,7 +4,7 @@ import pathlib
 import shutil
 import threading
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -35,10 +35,10 @@ git_lock = threading.Lock()
 
 def cleanup_docker_image(instance_id: str, logger):
     """Helper function to clean up Docker image with proper error handling"""
-    logger.info(f"Cleaning up Docker image for {instance_id}")
+    logger.info(f"Cleaning up Docker image for {instance_id}.test")
     try:
-        remove_existing_image(instance_id, logger)
-        logger.info(f"Successfully removed Docker image for {instance_id}")
+        remove_existing_image(instance_id + ".test", logger)
+        logger.info(f"Successfully removed Docker image for {instance_id}.test")
     except Exception as cleanup_error:
         logger.error(f"Error cleaning up Docker image: {str(cleanup_error)}")
 
@@ -289,43 +289,56 @@ def process_examples_with_timeout(
     Returns:
         list: Results of processing each example (status strings)
     """
-    results = []
+
+    def process_with_timeout(example, exp_name, clean_up, timeout_seconds=3600):
+        """Wrapper that processes an example with timeout handling"""
+        # Set up logger for this task
+        logger = setup_logger(
+            debug=False,
+            instance_id=example["instance_id"],
+            root_dir=exp_name,
+        )
+
+        result = ["TIMEOUT"]  # Default result if timeout occurs
+
+        def execution_target():
+            try:
+                # Store the actual result if processing completes before timeout
+                result[0] = process_single_example(example, exp_name, None, clean_up)
+            except Exception as exc:
+                logger.error(f"Processing generated an exception: {exc}")
+                logger.error(f"Stack trace:\n{traceback.format_exc()}")
+                with open(os.path.join(logger.get_logdir(), "FINAL_STATUS"), "w") as f:
+                    f.write("EXCEPTION")
+                result[0] = "EXCEPTION"
+
+        # Create and start execution thread
+        execution_thread = threading.Thread(target=execution_target)
+        execution_thread.daemon = True
+        execution_thread.start()
+
+        # Wait for execution to complete or timeout
+        execution_thread.join(timeout=timeout_seconds)
+
+        # If thread is still running after timeout
+        if execution_thread.is_alive():
+            logger.error(f"Processing timed out after {timeout_seconds} seconds")
+            with open(os.path.join(logger.get_logdir(), "FINAL_STATUS"), "w") as f:
+                f.write("TIMEOUT")
+            # No way to forcibly terminate the thread in Python,
+            # but marking it as daemon ensures it won't prevent program exit
+
+        return result[0]
 
     # Create a pool of workers
     with ThreadPoolExecutor(max_workers=num_processes) as executor:
-        # Submit all tasks
-        future_to_example = {
-            executor.submit(process_single_example, example, exp_name, None, clean_up): example
-            for example in examples
-        }
-
-        # Process results with timeout
-        for future in as_completed(future_to_example, timeout=None):  # No global timeout
-            example = future_to_example[future]
-            try:
-                # Individual task timeout is applied when getting the result
-                result = future.result(timeout=timeout_seconds)
-                results.append(result)
-            except TimeoutError:
-                logger = setup_logger(
-                    debug=False,
-                    instance_id=example["instance_id"],
-                    root_dir=exp_name,
-                )
-                logger.error(f"Processing timed out after {timeout_seconds} seconds")
-                with open(os.path.join(logger.get_logdir(), "FINAL_STATUS"), "w") as f:
-                    f.write("TIMEOUT")
-                results.append("TIMEOUT")
-            except Exception as exc:
-                logger = setup_logger(
-                    debug=False,
-                    instance_id=example["instance_id"],
-                    root_dir=exp_name,
-                )
-                logger.error(f"Processing generated an exception: {exc}")
-                with open(os.path.join(logger.get_logdir(), "FINAL_STATUS"), "w") as f:
-                    f.write("EXCEPTION")
-                results.append("EXCEPTION")
+        # Use map to process all examples and collect results
+        results = list(
+            executor.map(
+                lambda example: process_with_timeout(example, exp_name, clean_up, timeout_seconds),
+                examples,
+            )
+        )
 
     return results
 
@@ -386,7 +399,7 @@ if __name__ == "__main__":
         # Normal processing mode - load dataset and process examples
         # Load SWE-Bench dataset
         swe_bench = get_even_sample_dataset(verbose=False)
-        swe_bench = list(filter(lambda x: x["repo"] == "psf/requests", swe_bench))
+        swe_bench = list(filter(lambda x: x["repo"] == "django/django", swe_bench))
 
         # Determine the range of examples to process
         end_idx = (
@@ -395,7 +408,7 @@ if __name__ == "__main__":
         examples = [swe_bench[i] for i in range(args.start_index, end_idx)]
 
         # Process examples with timeout
-        timeout_seconds = 3600  # 1 hour timeout per task, adjust as needed
+        timeout_seconds = 30 * 60  # half an hour timeout per task
         results = process_examples_with_timeout(
             examples, args.exp_name, args.num_processes, timeout_seconds, args.clean_up
         )
@@ -404,10 +417,6 @@ if __name__ == "__main__":
         total = len(results)
         successful = sum(1 for r in results if r == "SUCCESS")
         print("\nProcessing complete!")
-        print(f"Total examples processed: {total}")
-        print(f"Successful: {successful}")
-        print(f"Failed: {total - successful}")
-        print(f"Success rate: {(successful/total)*100:.2f}%")
 
         # Print detailed breakdown
         status_counts: Dict[str, int] = {}

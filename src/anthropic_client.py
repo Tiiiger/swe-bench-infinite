@@ -41,7 +41,7 @@ class AnthropicClient:
         self.max_backoff = max_backoff
 
     def create_message_with_retry(
-        self, messages, model: str = "claude-3-7-sonnet-latest", max_tokens: int = 8192, **kwargs
+        self, messages, model: str = "claude-3-7-sonnet-latest", max_tokens: int = 16384, **kwargs
     ) -> Message:
         """
         Send a message to the Anthropic API with retry logic for rate limits.
@@ -64,7 +64,7 @@ class AnthropicClient:
                     model=model,
                     max_tokens=max_tokens,
                     messages=messages,
-                    thinking={"type": "enabled", "budget_tokens": 4096},
+                    thinking={"type": "enabled", "budget_tokens": 8192},
                     **kwargs,
                 )
             except anthropic.RateLimitError as e:

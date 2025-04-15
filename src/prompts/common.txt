@@ -14,6 +14,7 @@ We will also git clone the repo, checkout the commit, and move to the repo direc
 Assume that the dependencies you specified are installed correctly, what bash commands do we need to run to install the development environment?
 We will later apply edits to the repo and want to test the edits. So you need to install the development environment in editable mode so that we can test the edits.
 For example, "pip install -e ."  is a usual command to install the development environment. There are also repos that don't support `pip install -e.". Read the docs carefully to make the right choice. However, you may need to add more flags to the command, specify install options, add environment variables, etc.
+Because we are installing the dependencies in conda, so when applicable, you should turn on --no-build-isolation, and --no-use-pep517 in pip install.
 Here are some common mistakes to watch out for:
 - Do not write any `cd` command. We will always execute your install commands in the correct path `/testbed` and this cannot be changed.
 - Do not include pip commands in the install_commands field. We (the developers) will run the pip commands separately.
