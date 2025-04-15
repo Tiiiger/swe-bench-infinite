@@ -195,7 +195,15 @@ def process_single_example(
             status = "FAILURE"
         else:
             logger.info("Eval completed successfully")
-            status = "SUCCESS"
+            # NOTE(tianyi):
+            # pytest return code == 0 means all tests passed => must be resolved
+            # however, because the test log parser might be wrong, the report may suggest otherwise
+            #
+            # "RESOLVED" would be a lowerbound of the actual result
+            if eval_run_result.returncode == 0 or list(report.values())[0]["resolved"]:
+                status = "RESOLVED"
+            else:
+                status = "UNRESOLVED"
 
     except Exception as e:
         logger.error(f"Error processing example {example['instance_id']}: {str(e)}")
