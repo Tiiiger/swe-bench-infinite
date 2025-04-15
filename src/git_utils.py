@@ -12,13 +12,24 @@ from github import Github
 
 from logger import setup_logger
 
+# NOTE(tianyi)
 # These are cached here to avoid github api rate limiting
+# these are not repo specific hacks
+# we can make a more principled approach to cache these in the future
+# we might be able to just template this away, haven't tested that yet
 GITHUB_URLS = {
     "scikit-learn/scikit-learn": "https://github.com/scikit-learn/scikit-learn",
     "sympy/sympy": "https://github.com/sympy/sympy",
     "pytest-dev/pytest": "https://github.com/pytest-dev/pytest",
     "pydata/xarray": "https://github.com/pydata/xarray",
     "psf/requests": "https://github.com/psf/requests",
+    "django/django": "https://github.com/django/django",
+    "astropy/astropy": "https://github.com/astropy/astropy",
+    "matplotlib/matplotlib": "https://github.com/matplotlib/matplotlib",
+    "sphinx-doc/sphinx": "https://github.com/sphinx-doc/sphinx",
+    "pylint-dev/pylint": "https://github.com/pylint-dev/pylint",
+    "mwaskom/seaborn": "https://github.com/mwaskom/seaborn",
+    "pallets/flask": "https://github.com/pallets/flask",
 }
 
 

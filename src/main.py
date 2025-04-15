@@ -381,6 +381,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Clean up Docker images after processing",
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Filter examples by repository (e.g., 'django/django')",
+    )
 
     args = parser.parse_args()
 
@@ -399,7 +405,11 @@ if __name__ == "__main__":
         # Normal processing mode - load dataset and process examples
         # Load SWE-Bench dataset
         swe_bench = get_even_sample_dataset(verbose=False)
-        swe_bench = list(filter(lambda x: x["repo"] == "django/django", swe_bench))
+
+        if args.dataset is not None:
+            swe_bench = list(filter(lambda x: x["repo"] == args.dataset, swe_bench))
+        else:
+            swe_bench = list(swe_bench)
 
         # Determine the range of examples to process
         end_idx = (
