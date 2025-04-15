@@ -67,16 +67,25 @@ class AnthropicClient:
                     thinking={"type": "enabled", "budget_tokens": 8192},
                     **kwargs,
                 )
-            except anthropic.RateLimitError as e:
+            except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
                 current_retry += 1
                 if current_retry > self.max_retries:
-                    logger.error(f"Rate limit exceeded after {self.max_retries} retries")
+                    if isinstance(e, anthropic.RateLimitError):
+                        logger.error(f"Rate limit exceeded after {self.max_retries} retries")
+                    elif getattr(e, "status_code", 0) >= 500:
+                        logger.error(
+                            f"Error calling Anthropic API: Error code: 500 - {e.response.json()}"
+                        )
+                    else:
+                        logger.error(f"Error calling Anthropic API: {e}")
                     raise
 
-                # Get retry-after header if available, otherwise use exponential backoff
-                retry_after = getattr(e, "retry_after", None)
-                if retry_after is not None:
-                    sleep_time = float(retry_after)
+                # Calculate sleep time
+                if (
+                    isinstance(e, anthropic.RateLimitError)
+                    and getattr(e, "retry_after", None) is not None
+                ):
+                    sleep_time = float(e.retry_after)  # type: ignore
                 else:
                     # Exponential backoff with jitter
                     sleep_time = min(
@@ -84,8 +93,21 @@ class AnthropicClient:
                     )
                     backoff_time = sleep_time
 
+                # Log appropriate message
+                if isinstance(e, anthropic.RateLimitError):
+                    error_type = "Rate limit hit"
+                elif getattr(e, "status_code", 0) >= 500:
+                    error_type = "Internal server error (500)"
+                # No need to retry for 4XX errors
+                # usually, they are inputs that exceed the input token limit
+                elif getattr(e, "status_code", 0) >= 400:
+                    logger.error(f"Error calling Anthropic API: {e}")
+                    raise
+                else:
+                    error_type = f"API error: {getattr(e, 'status_code', 'unknown')}"
+
                 logger.warning(
-                    f"Rate limit hit. Retrying in {sleep_time:.2f} seconds (attempt {current_retry}/{self.max_retries})"
+                    f"{error_type}. Retrying in {sleep_time:.2f} seconds (attempt {current_retry}/{self.max_retries})"
                 )
                 time.sleep(sleep_time)
             except Exception as e:
