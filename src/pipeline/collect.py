@@ -13,6 +13,9 @@ def collect_requirements(
     # load prompt from prompts/requirements_collection.txt
     with open("src/prompts/requirements_collection.txt", "r") as f:
         prompt = f.read()
+    with open("src/prompts/common.txt", "r") as f:
+        common_prompt = f.read()
+    prompt = prompt.replace("{common_instructions}", common_prompt)
     prompt = prompt.replace("{file_contents_str}", make_file_contents_str(file_contents))
     prompt = prompt.replace("{commit_hash}", commit_hash)
     prompt = prompt.replace("{commit_date}", commit_date)

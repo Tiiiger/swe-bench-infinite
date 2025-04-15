@@ -35,19 +35,6 @@ Based on the error message, can you retry and adjust the requirements that we ca
 {requirements_json}
 ```
 
-Here are some more instructions:
-1. For python version, identify the latest version of python mentioned in the files. For example, if the files mention python 3.8 and 3.10, you should choose 3.10.
-However, if the files only mention python >= 3.6, you should choose 3.6 and not any version above 3.6. This is because later versions of python may not be supported at the time of the commit and may not be backwards compatible.
-Unfortunately, due to the contraints in our underlying infrastructure, the minimum version of python we can support is 3.5. If you are installing a really really old repo, you'll have to try to make it work with at least 3.5.
-2. For apt packages, identify all the packages that need to be installed via apt-get install. We will install python via conda and you do not need to specify python or pip in the apt packages.
-3. For pip packages, there are a few scenarios:
-   - Absolute version: if the files mention a specific version, use that version.
-   - Relative version: if the files mention a relative version, such as a minimum version, include it as ">=X.Y.Z".
-   - No version: if the files do not mention a specific or relative version, leave the value empty.
-4. After getting your results, we (the developers) will run apt, conda, and pip commands to install the environment you specified.
-Assume that the dependencies you specified are installed correctly, what bash commands do we need to run to install the development environment?
-We will later apply edits to the repo and want to test the edits. So you need to install the development environment in editable mode so that we can test the edits.
-For example, "pip install -e ."  is a usual command to install the development environment. There are also repos that don't support `pip install -e.". Read the docs carefully to make the right choice. However, you may need to add more flags to the command, specify install options, add environment variables, etc.
-Do not write any `cd` command. We will always execute your install commands in the correct path `/testbed` and this cannot be changed.
+{common_instructions}
 
 Begin your work now, and output a ```json block using the same format from before.

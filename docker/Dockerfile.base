@@ -25,6 +25,8 @@ RUN wget 'https://github.com/conda-forge/miniforge/releases/latest/download/Mini
 
 # Add conda to PATH
 ENV PATH=/opt/miniforge/bin:$PATH
+ARG PATH=/opt/miniforge/bin:$PATH
+RUN echo "export PATH=/opt/miniforge/bin:$PATH" > /etc/profile.d/conda.sh
 RUN mamba init --all
 RUN conda config --append channels conda-forge
 

@@ -24,6 +24,9 @@ def retry_test(
     # load prompt from prompts/trial_and_error.txt
     with open("src/prompts/test_trial_and_error.txt", "r") as f:
         prompt = f.read()
+    with open("src/prompts/common.txt", "r") as f:
+        common_prompt = f.read()
+    prompt = prompt.replace("{common_instructions}", common_prompt)
     prompt = prompt.replace("{file_contents_str}", make_file_contents_str(file_contents))
     prompt = prompt.replace("{requirements_json}", requirements_json)
     prompt = prompt.replace("{commit_hash}", commit_hash)

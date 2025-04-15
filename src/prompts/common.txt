@@ -1,0 +1,21 @@
+Here are some more instructions:
+1. For python version, identify the latest version of python mentioned in the files.
+For example, if setup.py mentions the package is compatible with python, 3.5, 3.6, and 3.7, you should choose 3.7.
+However, if setup.py hasn't mentioned python 3.7, you should not choose 3.8.
+Basically, we want to choose the highest version of python that is available at the time of the commit.
+Unfortunately, due to the contraints in our underlying infrastructure (i.e, conda), the minimum version of python we can support is 3.4. If you are installing a really really old repo, you'll have to try to make it work with at least 3.4.
+2. For apt packages, identify all the packages that need to be installed via apt-get install. We will install python via conda and you do not need to specify python or pip in the apt packages.
+3. For pip packages, there are a few scenarios:
+   - Absolute version: if the files mention a specific version, use that version.
+   - Relative version: if the files mention a relative version, such as a minimum version, include it as ">=X.Y.Z".
+   - No version: if the files do not mention a specific or relative version, leave the value empty.
+4. After getting your results, we (the developers) will run apt, conda, and pip commands to install the environment you specified.
+We will also git clone the repo, checkout the commit, and move to the repo directory.
+Assume that the dependencies you specified are installed correctly, what bash commands do we need to run to install the development environment?
+We will later apply edits to the repo and want to test the edits. So you need to install the development environment in editable mode so that we can test the edits.
+For example, "pip install -e ."  is a usual command to install the development environment. There are also repos that don't support `pip install -e.". Read the docs carefully to make the right choice. However, you may need to add more flags to the command, specify install options, add environment variables, etc.
+Here are some common mistakes to watch out for:
+- Do not write any `cd` command. We will always execute your install commands in the correct path `/testbed` and this cannot be changed.
+- Do not include pip commands in the install_commands field. We (the developers) will run the pip commands separately.
+- Do not include any git clone commands
+- Do not try to setup virtualenv or conda environment. If you need to change any dependencies, do that by updating the requirements object in json.

@@ -81,6 +81,9 @@ def process_eval_report(
     with open(Path(eval_report_logger.get_logdir()) / "report.json", "w") as f:
         json.dump(report, f, indent=2)
 
+    # stop the container
+    container.stop()
+
     return (
         subprocess.CompletedProcess(
             args=[], returncode=exit_code, stdout=test_output_log, stderr=test_output_log

@@ -64,10 +64,15 @@ def write_docker_files(
     log_pip_path = os.path.join(log_subdir, "pip_install.sh")
     with open(log_pip_path, "w") as f:
         f.write("#!/bin/bash\n")
-        f.write("mamba activate testbed\n")
+        # Need to handle py34 carefully
+        if requirements_data["python_version"] == "3.4":
+            f.write("curl https://bootstrap.pypa.io/pip/3.4/get-pip.py -o get-pip.py\n")
+            f.write("python get-pip.py pip==19.1\n")
         for package, version in requirements_data["pip_packages"].items():
             if version == "":
                 f.write(f"pip install {package}\n")
+            elif not version[0].isdigit():
+                f.write(f"pip install {package}{version}\n")
             else:
                 f.write(f"pip install {package}=={version}\n")
     log_paths["pip_install.sh"] = log_pip_path

@@ -17,6 +17,8 @@ GITHUB_URLS = {
     "scikit-learn/scikit-learn": "https://github.com/scikit-learn/scikit-learn",
     "sympy/sympy": "https://github.com/sympy/sympy",
     "pytest-dev/pytest": "https://github.com/pytest-dev/pytest",
+    "pydata/xarray": "https://github.com/pydata/xarray",
+    "psf/requests": "https://github.com/psf/requests",
 }
 
 

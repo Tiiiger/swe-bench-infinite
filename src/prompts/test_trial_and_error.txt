@@ -39,4 +39,6 @@ If you think the error cannot be solved by updating the requirements, explain yo
 {requirements_json}
 ```
 
+{common_instructions}
+
 Begin your work now!
